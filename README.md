@@ -6,23 +6,23 @@ replacement, not Redis protocol or command compatibility.
 
 This repository publishes two packages:
 
-- `@postgrex/noredis`: KV/TTL cache, collections, counters, advisory locks, rate limiting,
+- `@postgresx/noredis`: KV/TTL cache, collections, counters, advisory locks, rate limiting,
   PostgreSQL pub/sub helpers, and a thin `pg-boss` queue wrapper.
 - `@postgresx/bun-listen`: a Bun-native PostgreSQL `LISTEN/NOTIFY` client using
   `Bun.connect()`. It is a subpackage and can be installed independently.
 
 Runtime adapters:
 
-- Bun: use `Bun.SQL` through `@postgrex/noredis/adapters/bun`, and use
+- Bun: use `Bun.SQL` through `@postgresx/noredis/adapters/bun`, and use
   `@postgresx/bun-listen` for low-level realtime notifications.
-- Node.js: use the `pg` package through `@postgrex/noredis/adapters/node`.
+- Node.js: use the `pg` package through `@postgresx/noredis/adapters/node`.
 
-The published `@postgrex/noredis` package does not install `pg`, `pg-boss`, Redis clients,
+The published `@postgresx/noredis` package does not install `pg`, `pg-boss`, Redis clients,
 or `@postgresx/bun-listen` for you. Install those only for the features you use.
 
 ## Installation
 
-`@postgrex/noredis` has no required runtime dependencies. Install the database driver or
+`@postgresx/noredis` has no required runtime dependencies. Install the database driver or
 realtime package only for the runtime features you use.
 
 ### Bun.js
@@ -30,13 +30,13 @@ realtime package only for the runtime features you use.
 Base toolkit with `Bun.SQL`:
 
 ```bash
-bun add @postgrex/noredis
+bun add @postgresx/noredis
 ```
 
 ```ts
 import { SQL } from "bun";
-import { createPgredis } from "@postgrex/noredis";
-import { createBunSqlAdapter } from "@postgrex/noredis/adapters/bun";
+import { createPgredis } from "@postgresx/noredis";
+import { createBunSqlAdapter } from "@postgresx/noredis/adapters/bun";
 
 const sql = createBunSqlAdapter(new SQL(process.env.DATABASE_URL!));
 const redis = createPgredis({ sql, namespace: "app" });
@@ -49,11 +49,11 @@ const session = await redis.cache.get<{ userId: number }>("session:abc");
 Bun realtime `LISTEN/NOTIFY`:
 
 ```bash
-bun add @postgrex/noredis @postgresx/bun-listen
+bun add @postgresx/noredis @postgresx/bun-listen
 ```
 
 ```ts
-import { createBunPgListener, publishPgNotify } from "@postgrex/noredis";
+import { createBunPgListener, publishPgNotify } from "@postgresx/noredis";
 
 const listener = createBunPgListener(process.env.DATABASE_URL!, {
   channels: ["cache_invalidate"],
@@ -85,12 +85,12 @@ const listener = createPgListener(process.env.DATABASE_URL!, ["events"], (_chann
 Base toolkit with `pg`:
 
 ```bash
-npm install @postgrex/noredis pg
+npm install @postgresx/noredis pg
 ```
 
 ```ts
-import { createPgredis } from "@postgrex/noredis";
-import { createPgAdapter } from "@postgrex/noredis/adapters/node";
+import { createPgredis } from "@postgresx/noredis";
+import { createPgAdapter } from "@postgresx/noredis/adapters/node";
 
 const sql = createPgAdapter(process.env.DATABASE_URL!);
 const redis = createPgredis({ sql, namespace: "app" });
@@ -103,7 +103,7 @@ await sql.close();
 Node.js `LISTEN/NOTIFY`:
 
 ```ts
-import { createPgNodeListener } from "@postgrex/noredis/adapters/node";
+import { createPgNodeListener } from "@postgresx/noredis/adapters/node";
 
 const listener = createPgNodeListener(process.env.DATABASE_URL!, {
   channels: ["events"],
@@ -116,11 +116,11 @@ const listener = createPgNodeListener(process.env.DATABASE_URL!, {
 Queues with `pg-boss`:
 
 ```bash
-npm install @postgrex/noredis pg pg-boss
+npm install @postgresx/noredis pg pg-boss
 ```
 
 ```ts
-import { createPgBossJobQueue } from "@postgrex/noredis";
+import { createPgBossJobQueue } from "@postgresx/noredis";
 
 const queue = createPgBossJobQueue({
   connectionString: process.env.DATABASE_URL,
@@ -157,13 +157,13 @@ bun run benchmark
 The benchmark writes results to `benchmark.md`. The GitHub Actions benchmark
 workflow is manual and also uploads the generated document as an artifact.
 `ioredis` is installed only in this repository as a benchmark/dev dependency;
-it is not a runtime dependency of the published `@postgrex/noredis` package.
+it is not a runtime dependency of the published `@postgresx/noredis` package.
 
 ## Launch readiness
 
 Current local verification:
 
-- `bun run build` passes for `@postgresx/bun-listen` and `@postgrex/noredis`.
+- `bun run build` passes for `@postgresx/bun-listen` and `@postgresx/noredis`.
 - `bun test packages/` passes the package test suite.
 - `bun run check` passes TypeScript checks.
 

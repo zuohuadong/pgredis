@@ -1,8 +1,8 @@
 # @postgresx/bun-listen
 
-Bun-native PostgreSQL `LISTEN/NOTIFY` client used by `@postgrex/noredis`. It is published
+Bun-native PostgreSQL `LISTEN/NOTIFY` client used by `@postgresx/noredis`. It is published
 as a separate package so Bun projects can use it directly without installing
-the full `@postgrex/noredis` toolkit.
+the full `@postgresx/noredis` toolkit.
 
 It connects through `Bun.connect()` and implements the PostgreSQL wire protocol
 for notification workloads. It supports TLS negotiation, MD5, cleartext, and

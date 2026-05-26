@@ -40,8 +40,8 @@ try {
   await run("npm", ["install", "--ignore-scripts", pgredisTarball, listenerTarball, "pg@^8.16.3"], { cwd: temp });
 
   const nodeSmoke = `
-    import { createPgredis, publishPgNotify } from "@postgrex/noredis";
-    import { createPgAdapter, createPgNodeListener } from "@postgrex/noredis/adapters/node";
+    import { createPgredis, publishPgNotify } from "@postgresx/noredis";
+    import { createPgAdapter, createPgNodeListener } from "@postgresx/noredis/adapters/node";
     import { createPgListener } from "@postgresx/bun-listen";
     if (typeof createPgredis !== "function") throw new Error("createPgredis export missing");
     if (typeof createPgAdapter !== "function") throw new Error("createPgAdapter export missing");
@@ -50,8 +50,8 @@ try {
     if (typeof createPgListener !== "function") throw new Error("createPgListener export missing");
   `;
   const bunSmoke = `
-    import { createPgredis } from "@postgrex/noredis";
-    import { createBunSqlAdapter } from "@postgrex/noredis/adapters/bun";
+    import { createPgredis } from "@postgresx/noredis";
+    import { createBunSqlAdapter } from "@postgresx/noredis/adapters/bun";
     import { createPgListener } from "@postgresx/bun-listen";
     if (typeof createPgredis !== "function") throw new Error("createPgredis export missing");
     if (typeof createBunSqlAdapter !== "function") throw new Error("createBunSqlAdapter export missing");

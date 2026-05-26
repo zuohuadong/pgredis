@@ -21,7 +21,7 @@ It provides:
 
 ## Installation
 
-`@postgrex/noredis` itself has no required runtime dependencies. Install runtime-specific
+`@postgresx/noredis` itself has no required runtime dependencies. Install runtime-specific
 packages only for the adapters or features you use.
 
 ### Bun.js
@@ -29,13 +29,13 @@ packages only for the adapters or features you use.
 Base toolkit with `Bun.SQL`:
 
 ```bash
-bun add @postgrex/noredis
+bun add @postgresx/noredis
 ```
 
 ```ts
 import { SQL } from "bun";
-import { createPgredis } from "@postgrex/noredis";
-import { createBunSqlAdapter } from "@postgrex/noredis/adapters/bun";
+import { createPgredis } from "@postgresx/noredis";
+import { createBunSqlAdapter } from "@postgresx/noredis/adapters/bun";
 
 const sql = createBunSqlAdapter(new SQL(process.env.DATABASE_URL!));
 const pg = createPgredis({ sql, namespace: "app" });
@@ -44,11 +44,11 @@ const pg = createPgredis({ sql, namespace: "app" });
 Bun realtime `LISTEN/NOTIFY`:
 
 ```bash
-bun add @postgrex/noredis @postgresx/bun-listen
+bun add @postgresx/noredis @postgresx/bun-listen
 ```
 
 ```ts
-import { createBunPgListener, publishPgNotify } from "@postgrex/noredis";
+import { createBunPgListener, publishPgNotify } from "@postgresx/noredis";
 
 const listener = createBunPgListener(process.env.DATABASE_URL!, {
   channels: ["cache_invalidate"],
@@ -81,12 +81,12 @@ const listener = createPgListener(process.env.DATABASE_URL!, ["events"], (_chann
 Base toolkit with `pg`:
 
 ```bash
-npm install @postgrex/noredis pg
+npm install @postgresx/noredis pg
 ```
 
 ```ts
-import { createPgredis } from "@postgrex/noredis";
-import { createPgAdapter } from "@postgrex/noredis/adapters/node";
+import { createPgredis } from "@postgresx/noredis";
+import { createPgAdapter } from "@postgresx/noredis/adapters/node";
 
 const sql = createPgAdapter(process.env.DATABASE_URL!);
 const pg = createPgredis({ sql, namespace: "app" });
@@ -95,7 +95,7 @@ const pg = createPgredis({ sql, namespace: "app" });
 Node.js `LISTEN/NOTIFY`:
 
 ```ts
-import { createPgNodeListener } from "@postgrex/noredis/adapters/node";
+import { createPgNodeListener } from "@postgresx/noredis/adapters/node";
 
 const listener = createPgNodeListener(process.env.DATABASE_URL!, {
   channels: ["cache_invalidate"],
@@ -108,13 +108,13 @@ const listener = createPgNodeListener(process.env.DATABASE_URL!, {
 Queues with `pg-boss`:
 
 ```bash
-npm install @postgrex/noredis pg pg-boss
+npm install @postgresx/noredis pg pg-boss
 ```
 
 ## KV/TTL Cache
 
 ```ts
-import { createPgKvCache } from "@postgrex/noredis";
+import { createPgKvCache } from "@postgresx/noredis";
 
 const cache = createPgKvCache({
   sql,
@@ -130,7 +130,7 @@ const value = await cache.get<{ userId: number }>("token:abc");
 ## Unified client
 
 ```ts
-import { createPgredis } from "@postgrex/noredis";
+import { createPgredis } from "@postgresx/noredis";
 
 const pg = createPgredis({
   sql,
@@ -167,7 +167,7 @@ bun add @postgresx/bun-listen
 ```
 
 ```ts
-import { createBunPgListener, publishPgNotify } from "@postgrex/noredis";
+import { createBunPgListener, publishPgNotify } from "@postgresx/noredis";
 
 createBunPgListener(databaseUrl, ["cache_invalidate"], (_channel, payload) => {
   console.log(payload);
@@ -179,7 +179,7 @@ await publishPgNotify(sql, "cache_invalidate", { key: "token:abc" });
 Node.js can use the `pg`-based listener from the adapter subpath:
 
 ```ts
-import { createPgNodeListener } from "@postgrex/noredis/adapters/node";
+import { createPgNodeListener } from "@postgresx/noredis/adapters/node";
 
 createPgNodeListener(process.env.DATABASE_URL!, {
   channels: ["cache_invalidate"],
@@ -195,7 +195,7 @@ createPgNodeListener(process.env.DATABASE_URL!, {
 PostgreSQL when the transaction ends.
 
 ```ts
-import { withPgAdvisoryLock } from "@postgrex/noredis";
+import { withPgAdvisoryLock } from "@postgresx/noredis";
 
 await withPgAdvisoryLock(sql, "billing:flush", async (tx) => {
   await tx.unsafe("SELECT 1");
@@ -205,7 +205,7 @@ await withPgAdvisoryLock(sql, "billing:flush", async (tx) => {
 ## Rate limit
 
 ```ts
-import { createPgFixedWindowRateLimiter } from "@postgrex/noredis";
+import { createPgFixedWindowRateLimiter } from "@postgresx/noredis";
 
 const limiter = createPgFixedWindowRateLimiter({
   sql,
@@ -221,7 +221,7 @@ const result = await limiter.hit("user:1");
 ## Queue
 
 ```ts
-import { createPgBossJobQueue } from "@postgrex/noredis";
+import { createPgBossJobQueue } from "@postgresx/noredis";
 
 const queue = createPgBossJobQueue({
   connectionString: process.env.DATABASE_URL,
@@ -238,14 +238,14 @@ await queue.work("webhook.deliver", { batchSize: 1 }, async (jobs) => {
 });
 ```
 
-`pg-boss` is loaded dynamically and is not a runtime dependency of `@postgrex/noredis`.
+`pg-boss` is loaded dynamically and is not a runtime dependency of `@postgresx/noredis`.
 Install it only when queue features are used:
 
 ```bash
-npm install @postgrex/noredis pg-boss
+npm install @postgresx/noredis pg-boss
 ```
 
-`@postgrex/noredis` intentionally keeps the queue API close to `pg-boss`:
+`@postgresx/noredis` intentionally keeps the queue API close to `pg-boss`:
 
 - `start()` starts `pg-boss` and creates configured queues.
 - `ensureQueue()` creates or updates queue metadata.
@@ -261,7 +261,7 @@ Streams commands.
 
 Current local verification:
 
-- `bun run build` passes for `@postgresx/bun-listen` and `@postgrex/noredis`.
+- `bun run build` passes for `@postgresx/bun-listen` and `@postgresx/noredis`.
 - `bun test packages/` passes the package test suite.
 - `bun run check` passes TypeScript checks.
 

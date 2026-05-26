@@ -37,7 +37,7 @@
   "packages": {
     "packages/pgredis": {
       "release-type": "node",
-      "component": "@postgrex/noredis",
+      "component": "@postgresx/noredis",
       "changelog-path": "CHANGELOG.md"
     },
     "packages/bun-listen": {

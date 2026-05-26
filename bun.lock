@@ -25,7 +25,7 @@
       },
     },
     "packages/pgredis": {
-      "name": "@postgrex/noredis",
+      "name": "@postgresx/noredis",
       "version": "0.1.0",
       "devDependencies": {
         "@postgresx/bun-listen": "workspace:*",
@@ -102,7 +102,7 @@
 
     "@postgresx/bun-listen": ["@postgresx/bun-listen@workspace:packages/bun-listen"],
 
-    "@postgrex/noredis": ["@postgrex/noredis@workspace:packages/pgredis"],
+    "@postgresx/noredis": ["@postgresx/noredis@workspace:packages/pgredis"],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.60.4", "", { "os": "android", "cpu": "arm" }, "sha512-F5QXMSiFebS9hKZj02XhWLLnRpJ3B3AROP0tWbFBSj+6kCbg5m9j5JoHKd4mmSVy5mS/IMQloYgYxCuJC0fxEQ=="],
 
