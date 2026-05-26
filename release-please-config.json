@@ -1,0 +1,49 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bump-minor-pre-major": true,
+  "pull-request-title-pattern": "chore${scope}: release${component} v${version}",
+  "changelog-sections": [
+    {
+      "type": "feat",
+      "section": "Features",
+      "hidden": false
+    },
+    {
+      "type": "fix",
+      "section": "Bug Fixes",
+      "hidden": false
+    },
+    {
+      "type": "perf",
+      "section": "Performance Improvements",
+      "hidden": false
+    },
+    {
+      "type": "refactor",
+      "section": "Refactoring",
+      "hidden": false
+    },
+    {
+      "type": "docs",
+      "section": "Documentation",
+      "hidden": false
+    },
+    {
+      "type": "chore",
+      "section": "Miscellaneous",
+      "hidden": false
+    }
+  ],
+  "packages": {
+    "packages/pgredis": {
+      "release-type": "node",
+      "component": "@postgresx/noredis",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "packages/bun-listen": {
+      "release-type": "node",
+      "component": "@postgresx/bun-listen",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

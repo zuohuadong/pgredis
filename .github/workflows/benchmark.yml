@@ -1,0 +1,162 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "benchmark/**"
+      - ".github/workflows/benchmark.yml"
+      - "packages/pgredis/src/**"
+      - "packages/pgredis/package.json"
+      - "packages/bun-listen/src/**"
+      - "packages/bun-listen/package.json"
+      - "package.json"
+      - "bun.lock"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Operations per benchmark case
+        required: true
+        default: "2000"
+      concurrency:
+        description: Concurrent workers per benchmark case
+        required: true
+        default: "16"
+      commit_results:
+        description: Commit benchmark.md back to this branch
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+        default: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    name: Runtime backend comparison
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgredis
+        ports:
+          - 5432:5432
+        options: >-
+          --cpus 2
+          --memory 2g
+          --health-cmd "pg_isready -U postgres -d pgredis"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --cpus 2
+          --memory 2g
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Apply PostgreSQL 18 benchmark config
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec -e PGPASSWORD=postgres "$POSTGRES_CONTAINER" \
+            psql -U postgres -d pgredis -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER SYSTEM SET io_method = 'worker';
+          ALTER SYSTEM SET io_workers = 8;
+          ALTER SYSTEM SET io_max_concurrency = 64;
+          ALTER SYSTEM SET effective_io_concurrency = 64;
+          ALTER SYSTEM SET maintenance_io_concurrency = 64;
+          ALTER SYSTEM SET shared_buffers = '512MB';
+          ALTER SYSTEM SET effective_cache_size = '1536MB';
+          ALTER SYSTEM SET work_mem = '16MB';
+          ALTER SYSTEM SET maintenance_work_mem = '256MB';
+          ALTER SYSTEM SET max_wal_size = '4GB';
+          ALTER SYSTEM SET min_wal_size = '1GB';
+          ALTER SYSTEM SET checkpoint_timeout = '30min';
+          ALTER SYSTEM SET synchronous_commit = 'off';
+          ALTER SYSTEM SET jit = 'off';
+          SQL
+          docker restart "$POSTGRES_CONTAINER"
+          until docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d pgredis; do
+            sleep 1
+          done
+          docker exec -e PGPASSWORD=postgres "$POSTGRES_CONTAINER" \
+            psql -U postgres -d pgredis -v ON_ERROR_STOP=1 <<'SQL'
+          SHOW server_version;
+          SELECT name, setting, source, sourcefile, pending_restart
+          FROM pg_settings
+          WHERE name IN (
+            'io_method',
+            'io_workers',
+            'io_max_concurrency',
+            'effective_io_concurrency',
+            'maintenance_io_concurrency',
+            'shared_buffers',
+            'effective_cache_size',
+            'synchronous_commit',
+            'jit'
+          )
+          ORDER BY name;
+          SQL
+
+      - name: Run benchmark
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/pgredis
+          REDIS_URL: redis://127.0.0.1:6379
+          BENCHMARK_ITERATIONS: ${{ inputs.iterations }}
+          BENCHMARK_CONCURRENCY: ${{ inputs.concurrency }}
+        run: bun run benchmark
+
+      - name: Upload benchmark document
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-md
+          path: benchmark.md
+
+      - name: Commit benchmark results
+        if: github.event_name == 'push' || inputs.commit_results == 'true'
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git stash push --include-untracked -- benchmark.md README.md || true
+          git pull --rebase origin main
+          git stash pop || true
+          git add benchmark.md README.md
+          if git diff --cached --quiet; then
+            echo "No benchmark changes"
+          else
+            git commit -m "docs: update benchmark results"
+            git push || {
+              git fetch origin main
+              git rebase origin/main
+              git push
+            }
+          fi
