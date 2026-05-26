@@ -1,6 +1,17 @@
 name: Benchmark
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "benchmark/**"
+      - ".github/workflows/benchmark.yml"
+      - "packages/pgredis/src/**"
+      - "packages/pgredis/package.json"
+      - "packages/bun-listen/src/**"
+      - "packages/bun-listen/package.json"
+      - "package.json"
+      - "bun.lock"
   workflow_dispatch:
     inputs:
       iterations:
@@ -130,7 +141,7 @@ jobs:
           path: benchmark.md
 
       - name: Commit benchmark results
-        if: inputs.commit_results == 'true'
+        if: github.event_name == 'push' || inputs.commit_results == 'true'
         run: |
           set -e
           git config user.name "github-actions[bot]"
