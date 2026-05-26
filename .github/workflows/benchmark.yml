@@ -30,7 +30,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -38,8 +38,8 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --cpus 1
-          --memory 512m
+          --cpus 2
+          --memory 2g
           --health-cmd "pg_isready -U postgres -d pgredis"
           --health-interval 10s
           --health-timeout 5s
@@ -49,8 +49,8 @@ jobs:
         ports:
           - 6379:6379
         options: >-
-          --cpus 1
-          --memory 512m
+          --cpus 2
+          --memory 2g
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
@@ -69,6 +69,51 @@ jobs:
 
       - name: Install dependencies
         run: bun install
+
+      - name: Apply PostgreSQL 18 benchmark config
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec -e PGPASSWORD=postgres "$POSTGRES_CONTAINER" \
+            psql -U postgres -d pgredis -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER SYSTEM SET io_method = 'worker';
+          ALTER SYSTEM SET io_workers = 8;
+          ALTER SYSTEM SET io_max_concurrency = 64;
+          ALTER SYSTEM SET effective_io_concurrency = 64;
+          ALTER SYSTEM SET maintenance_io_concurrency = 64;
+          ALTER SYSTEM SET shared_buffers = '512MB';
+          ALTER SYSTEM SET effective_cache_size = '1536MB';
+          ALTER SYSTEM SET work_mem = '16MB';
+          ALTER SYSTEM SET maintenance_work_mem = '256MB';
+          ALTER SYSTEM SET max_wal_size = '4GB';
+          ALTER SYSTEM SET min_wal_size = '1GB';
+          ALTER SYSTEM SET checkpoint_timeout = '30min';
+          ALTER SYSTEM SET synchronous_commit = 'off';
+          ALTER SYSTEM SET jit = 'off';
+          SQL
+          docker restart "$POSTGRES_CONTAINER"
+          until docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d pgredis; do
+            sleep 1
+          done
+          docker exec -e PGPASSWORD=postgres "$POSTGRES_CONTAINER" \
+            psql -U postgres -d pgredis -v ON_ERROR_STOP=1 <<'SQL'
+          SHOW server_version;
+          SELECT name, setting, source, sourcefile, pending_restart
+          FROM pg_settings
+          WHERE name IN (
+            'io_method',
+            'io_workers',
+            'io_max_concurrency',
+            'effective_io_concurrency',
+            'maintenance_io_concurrency',
+            'shared_buffers',
+            'effective_cache_size',
+            'synchronous_commit',
+            'jit'
+          )
+          ORDER BY name;
+          SQL
 
       - name: Run benchmark
         env:
