@@ -1,0 +1,99 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Operations per benchmark case
+        required: true
+        default: "2000"
+      concurrency:
+        description: Concurrent workers per benchmark case
+        required: true
+        default: "16"
+      commit_results:
+        description: Commit benchmark.md back to this branch
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+        default: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    name: Redis vs PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgredis
+        ports:
+          - 5432:5432
+        options: >-
+          --cpus 1
+          --memory 512m
+          --health-cmd "pg_isready -U postgres -d pgredis"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --cpus 1
+          --memory 512m
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run benchmark
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/pgredis
+          REDIS_URL: redis://127.0.0.1:6379
+          BENCHMARK_ITERATIONS: ${{ inputs.iterations }}
+          BENCHMARK_CONCURRENCY: ${{ inputs.concurrency }}
+        run: bun run benchmark
+
+      - name: Upload benchmark document
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-md
+          path: benchmark.md
+
+      - name: Commit benchmark results
+        if: inputs.commit_results == 'true'
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add benchmark.md
+          if git diff --cached --quiet; then
+            echo "No benchmark.md changes"
+          else
+            git commit -m "docs: update benchmark results"
+            git push
+          fi

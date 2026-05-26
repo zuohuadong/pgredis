@@ -1,0 +1,32 @@
+{
+	"name": "pgredis-bun-listen",
+	"version": "0.1.0",
+	"description": "Bun-native PostgreSQL LISTEN/NOTIFY client for pgredis and standalone realtime use cases",
+	"type": "module",
+	"license": "MIT",
+	"sideEffects": false,
+	"files": [
+		"dist/**/*",
+		"README.md"
+	],
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsup src/index.ts --format esm --dts --clean --out-dir dist",
+		"test": "bun test src/*.test.ts",
+		"check": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3.14",
+		"@types/node": "^25.0.0",
+		"tsup": "^8.5.0",
+		"typescript": "^6.0.3"
+	}
+}

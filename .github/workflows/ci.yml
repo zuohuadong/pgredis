@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build, Type Check & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgredis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pgredis"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build packages
+        run: bun run build
+
+      - name: Run tests
+        run: bun test packages/
+
+      - name: Run PostgreSQL integration tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/pgredis
+        run: bun run test:integration
+
+      - name: Type check
+        run: bun run check
+
+      - name: Package smoke test
+        run: bun run smoke:pack
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build packages
+        run: bun run build
+
+      - name: Validate publish configuration
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is required for workflow_dispatch publish"
+            exit 1
+          fi
+
+      - name: Rewrite workspace dependencies
+        run: |
+          set -e
+          cat > /tmp/rewrite-workspace.js << 'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const packages = fs.readdirSync('packages').filter((name) => fs.statSync(path.join('packages', name)).isDirectory());
+          const versions = {};
+          for (const dir of packages) {
+            const file = path.join('packages', dir, 'package.json');
+            if (!fs.existsSync(file)) continue;
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+            versions[pkg.name] = pkg.version;
+          }
+          for (const dir of packages) {
+            const file = path.join('packages', dir, 'package.json');
+            if (!fs.existsSync(file)) continue;
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+            let changed = false;
+            for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+              for (const [name, range] of Object.entries(pkg[field] || {})) {
+                if (range === 'workspace:*' && versions[name]) {
+                  pkg[field][name] = '^' + versions[name];
+                  changed = true;
+                }
+              }
+            }
+            if (changed) {
+              fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+              console.log('Rewrote workspace dependencies in ' + file);
+            }
+          }
+          EOF
+          node /tmp/rewrite-workspace.js
+
+      - name: Publish changed packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          publish_failed=0
+
+          for pkg_dir in packages/*/; do
+            pkg_json="$pkg_dir/package.json"
+            if [ ! -f "$pkg_json" ]; then
+              continue
+            fi
+
+            name=$(node -p "require('./$pkg_json').name")
+            version=$(node -p "require('./$pkg_json').version")
+            exists=$(npm view "$name@$version" version 2>/dev/null || true)
+
+            if [ -z "$exists" ]; then
+              echo "Publishing $name@$version"
+              if ! (cd "$pkg_dir" && npm publish --provenance --access public); then
+                publish_failed=1
+              fi
+            else
+              echo "$name@$version already exists, skipping"
+            fi
+          done
+
+          if [ "$publish_failed" -eq 1 ]; then
+            echo "::error::One or more packages failed to publish"
+            exit 1
+          fi
