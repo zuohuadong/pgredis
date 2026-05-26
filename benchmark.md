@@ -1,6 +1,6 @@
 # Benchmark
 
-Generated at: 2026-05-26T23:33:15.924Z
+Generated at: 2026-05-26T23:41:33.794Z
 
 Iterations per case: 2000
 Concurrency per case: 16
@@ -21,45 +21,45 @@ Ops/sec is higher-is-better. Non-L1 PostgreSQL columns show the service-level ba
 
 | Operation | Redis | Node PG | Node PG/Redis | Node PG L1 | Node PG L1/Redis | Bun PG | Bun PG/Redis | Bun PG L1 | Bun PG L1/Redis |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| KV write | 37,359.65 | 6,799.69 | 0.18x | - | - | 15,469.24 | 0.41x | - | - |
-| KV write (batch) | 219,677.5 | 41,978.93 | 0.19x | - | - | 64,703.54 | 0.29x | - | - |
-| KV read | 43,517.5 | 9,217.15 | 0.21x | - | - | 20,280.37 | 0.47x | - | - |
-| KV read (batch) | 300,220.74 | 100,860.87 | 0.34x | - | - | 135,149.65 | 0.45x | - | - |
-| KV read (hot cache) | 49,405.11 | 9,663.28 | 0.2x | 1,385,768.02 | 28.05x | 25,933.79 | 0.52x | 684,688.35 | 13.86x |
-| Counter increment | 51,123.98 | 9,200.62 | 0.18x | - | - | 13,272.62 | 0.26x | - | - |
-| Set add | 58,966.13 | 4,626.04 | 0.08x | - | - | 6,921.68 | 0.12x | - | - |
-| Pub/Sub publish | 41,974.85 | 12,624.96 | 0.3x | - | - | 18,375.33 | 0.44x | - | - |
+| KV write | 29,589.68 | 6,024.44 | 0.2x | - | - | 10,462.59 | 0.35x | - | - |
+| KV write (batch) | 197,153.42 | 35,253.36 | 0.18x | - | - | 54,315.9 | 0.28x | - | - |
+| KV read | 36,799.54 | 6,516.98 | 0.18x | - | - | 14,727.71 | 0.4x | - | - |
+| KV read (batch) | 280,891.03 | 74,379.02 | 0.26x | - | - | 125,259.98 | 0.45x | - | - |
+| KV read (hot cache) | 40,545.65 | 6,693.7 | 0.17x | 1,378,698.01 | 34x | 13,834.58 | 0.34x | 627,734.57 | 15.48x |
+| Counter increment | 44,612.24 | 6,740.27 | 0.15x | - | - | 10,242.37 | 0.23x | - | - |
+| Set add | 46,388.29 | 4,139.44 | 0.09x | - | - | 5,786.01 | 0.12x | - | - |
+| Pub/Sub publish | 38,153.57 | 8,663.78 | 0.23x | - | - | 13,766.6 | 0.36x | - | - |
 
 ## Details
 
 | Operation | Backend | Iterations | Concurrency | Duration ms | Ops/sec |
 | --- | --- | ---: | ---: | ---: | ---: |
-| KV write | Node.js + Redis | 2000 | 16 | 53.53 | 37,359.65 |
-| KV write (batch) | Node.js + Redis | 2000 | 16 | 9.1 | 219,677.5 |
-| KV read | Node.js + Redis | 2000 | 16 | 45.96 | 43,517.5 |
-| KV read (batch) | Node.js + Redis | 2000 | 16 | 6.66 | 300,220.74 |
-| KV read (hot cache) | Node.js + Redis | 2000 | 16 | 40.48 | 49,405.11 |
-| Counter increment | Node.js + Redis | 2000 | 16 | 39.12 | 51,123.98 |
-| Set add | Node.js + Redis | 2000 | 16 | 33.92 | 58,966.13 |
-| Pub/Sub publish | Node.js + Redis | 2000 | 16 | 47.65 | 41,974.85 |
-| KV write | Node.js + PostgreSQL | 2000 | 16 | 294.13 | 6,799.69 |
-| KV write (batch) | Node.js + PostgreSQL | 2000 | 16 | 47.64 | 41,978.93 |
-| KV read | Node.js + PostgreSQL | 2000 | 16 | 216.99 | 9,217.15 |
-| KV read (batch) | Node.js + PostgreSQL | 2000 | 16 | 19.83 | 100,860.87 |
-| KV read (hot cache) | Node.js + PostgreSQL | 2000 | 16 | 206.97 | 9,663.28 |
-| Counter increment | Node.js + PostgreSQL | 2000 | 16 | 217.38 | 9,200.62 |
-| Set add | Node.js + PostgreSQL | 2000 | 16 | 432.34 | 4,626.04 |
-| Pub/Sub publish | Node.js + PostgreSQL | 2000 | 16 | 158.42 | 12,624.96 |
-| KV read (hot cache) | Node.js + PostgreSQL (L1) | 2000 | 16 | 1.44 | 1,385,768.02 |
-| KV write | Bun.js + PostgreSQL | 2000 | 16 | 129.29 | 15,469.24 |
-| KV write (batch) | Bun.js + PostgreSQL | 2000 | 16 | 30.91 | 64,703.54 |
-| KV read | Bun.js + PostgreSQL | 2000 | 16 | 98.62 | 20,280.37 |
-| KV read (batch) | Bun.js + PostgreSQL | 2000 | 16 | 14.8 | 135,149.65 |
-| KV read (hot cache) | Bun.js + PostgreSQL | 2000 | 16 | 77.12 | 25,933.79 |
-| Counter increment | Bun.js + PostgreSQL | 2000 | 16 | 150.69 | 13,272.62 |
-| Set add | Bun.js + PostgreSQL | 2000 | 16 | 288.95 | 6,921.68 |
-| Pub/Sub publish | Bun.js + PostgreSQL | 2000 | 16 | 108.84 | 18,375.33 |
-| KV read (hot cache) | Bun.js + PostgreSQL (L1) | 2000 | 16 | 2.92 | 684,688.35 |
+| KV write | Node.js + Redis | 2000 | 16 | 67.59 | 29,589.68 |
+| KV write (batch) | Node.js + Redis | 2000 | 16 | 10.14 | 197,153.42 |
+| KV read | Node.js + Redis | 2000 | 16 | 54.35 | 36,799.54 |
+| KV read (batch) | Node.js + Redis | 2000 | 16 | 7.12 | 280,891.03 |
+| KV read (hot cache) | Node.js + Redis | 2000 | 16 | 49.33 | 40,545.65 |
+| Counter increment | Node.js + Redis | 2000 | 16 | 44.83 | 44,612.24 |
+| Set add | Node.js + Redis | 2000 | 16 | 43.11 | 46,388.29 |
+| Pub/Sub publish | Node.js + Redis | 2000 | 16 | 52.42 | 38,153.57 |
+| KV write | Node.js + PostgreSQL | 2000 | 16 | 331.98 | 6,024.44 |
+| KV write (batch) | Node.js + PostgreSQL | 2000 | 16 | 56.73 | 35,253.36 |
+| KV read | Node.js + PostgreSQL | 2000 | 16 | 306.89 | 6,516.98 |
+| KV read (batch) | Node.js + PostgreSQL | 2000 | 16 | 26.89 | 74,379.02 |
+| KV read (hot cache) | Node.js + PostgreSQL | 2000 | 16 | 298.79 | 6,693.7 |
+| Counter increment | Node.js + PostgreSQL | 2000 | 16 | 296.72 | 6,740.27 |
+| Set add | Node.js + PostgreSQL | 2000 | 16 | 483.16 | 4,139.44 |
+| Pub/Sub publish | Node.js + PostgreSQL | 2000 | 16 | 230.85 | 8,663.78 |
+| KV read (hot cache) | Node.js + PostgreSQL (L1) | 2000 | 16 | 1.45 | 1,378,698.01 |
+| KV write | Bun.js + PostgreSQL | 2000 | 16 | 191.16 | 10,462.59 |
+| KV write (batch) | Bun.js + PostgreSQL | 2000 | 16 | 36.82 | 54,315.9 |
+| KV read | Bun.js + PostgreSQL | 2000 | 16 | 135.8 | 14,727.71 |
+| KV read (batch) | Bun.js + PostgreSQL | 2000 | 16 | 15.97 | 125,259.98 |
+| KV read (hot cache) | Bun.js + PostgreSQL | 2000 | 16 | 144.57 | 13,834.58 |
+| Counter increment | Bun.js + PostgreSQL | 2000 | 16 | 195.27 | 10,242.37 |
+| Set add | Bun.js + PostgreSQL | 2000 | 16 | 345.66 | 5,786.01 |
+| Pub/Sub publish | Bun.js + PostgreSQL | 2000 | 16 | 145.28 | 13,766.6 |
+| KV read (hot cache) | Bun.js + PostgreSQL (L1) | 2000 | 16 | 3.19 | 627,734.57 |
 
 Notes:
 
