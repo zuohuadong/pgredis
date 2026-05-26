@@ -1,6 +1,6 @@
 {
   "name": "@postgresx/noredis",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "PostgreSQL-backed Redis feature replacement toolkit: KV/TTL cache, pub/sub, advisory locks, rate limiting, and pg-boss queues",
   "type": "module",
   "license": "MIT",

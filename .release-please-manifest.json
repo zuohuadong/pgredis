@@ -1,4 +1,4 @@
 {
-  "packages/pgredis": "0.2.0",
+  "packages/pgredis": "0.3.0",
   "packages/bun-listen": "0.2.0"
 }

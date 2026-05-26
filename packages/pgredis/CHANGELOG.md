@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.2.0...@postgresx/noredis-v0.3.0) (2026-05-26)
+
+
+### Features
+
+* add pgredis migration primitives ([a4dfa43](https://github.com/zuohuadong/postgresx/commit/a4dfa43d19ebe73b9b614c4ec9bec76d67e99a67))
+
 ## [0.2.0](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.1.0...@postgresx/noredis-v0.2.0) (2026-05-26)
 
 
