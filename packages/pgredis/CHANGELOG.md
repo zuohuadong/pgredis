@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.3.0...@postgresx/noredis-v0.4.0) (2026-05-26)
+
+
+### Features
+
+* pgredis - PostgreSQL-powered Redis interface for Bun/Node ([614b1b7](https://github.com/zuohuadong/postgresx/commit/614b1b77bc7b501f54f7fe1fba70a051e72efc37))
+
 ## [0.3.0](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.2.0...@postgresx/noredis-v0.3.0) (2026-05-26)
 
 

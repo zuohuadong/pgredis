@@ -1,6 +1,6 @@
 {
 	"name": "@postgresx/bun-listen",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Bun-native PostgreSQL LISTEN/NOTIFY client for pgredis and standalone realtime use cases",
 	"type": "module",
 	"license": "MIT",
