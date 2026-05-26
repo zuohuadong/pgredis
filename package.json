@@ -12,6 +12,7 @@
     "test": "bun test packages/",
     "test:integration": "bun test packages/pgredis/src/integration.test.ts",
     "smoke:pack": "node scripts/smoke-packages.mjs",
+    "publish:packages": "node scripts/publish-packages.mjs",
     "benchmark": "bun run build && bun run benchmark/bench.ts"
   },
   "devDependencies": {
