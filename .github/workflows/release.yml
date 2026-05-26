@@ -17,20 +17,10 @@ jobs:
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
-      - name: Validate release configuration
-        env:
-          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
-        run: |
-          set -e
-          if [ -z "$RELEASE_PAT" ]; then
-            echo "::error::RELEASE_PAT is required for Release Please"
-            exit 1
-          fi
-
       - uses: googleapis/release-please-action@v5
         id: release
         with:
-          token: ${{ secrets.RELEASE_PAT }}
+          token: ${{ secrets.RELEASE_PAT || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
