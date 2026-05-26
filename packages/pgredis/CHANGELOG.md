@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.3.0...@postgresx/noredis-v0.3.1) (2026-05-26)
+
+
+### Documentation
+
+* include l1 in benchmark comparison ([c6e684d](https://github.com/zuohuadong/postgresx/commit/c6e684d0eed127b8003b3c5954fba8f693058901))
+* update benchmark readiness text ([a80c4ac](https://github.com/zuohuadong/postgresx/commit/a80c4ac5a93ee5f5991fd388f9ac9387eb3f9836))
+
 ## [0.3.0](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.2.0...@postgresx/noredis-v0.3.0) (2026-05-26)
 
 
