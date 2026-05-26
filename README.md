@@ -174,8 +174,9 @@ bun run benchmark
 ```
 
 The benchmark writes results to `benchmark.md` and updates the summary below.
-The GitHub Actions benchmark workflow is manual and also uploads the generated
-document as an artifact.
+The GitHub Actions benchmark workflow runs when benchmark-relevant files change
+and can also be dispatched manually; it uploads the generated document as an
+artifact.
 `ioredis` is installed only in this repository as a benchmark/dev dependency;
 it is not a runtime dependency of the published `@postgresx/noredis` package.
 

@@ -80,12 +80,14 @@ function remoteSummaryRows(rows: ComparisonRow[]): string[] {
   );
 }
 
-function l1SummaryRows(rows: ComparisonRow[]): string[] {
-  return rows
-    .filter((row) => row.nodePostgresL1 || row.bunPostgresL1)
-    .map((row) =>
-      `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
-    );
+function hotReadL1Row(rows: ComparisonRow[]): ComparisonRow | null {
+  return rows.find((row) => row.operation === "KV read (hot cache)" && (row.nodePostgresL1 || row.bunPostgresL1)) ?? null;
+}
+
+function l1Note(row: ComparisonRow | null, compact = false): string {
+  if (!row) return "No L1 hot-read row was generated.";
+  const prefix = compact ? "L1 hot-read note:" : "For the hot-read cache case with pgredis L1 enabled:";
+  return `${prefix} Node/Postgres L1 reached ${formatOps(row.nodePostgresL1)} ops/sec (${formatRatio(row.nodePostgresL1, row.nodeRedis)} vs Redis), and Bun/Postgres L1 reached ${formatOps(row.bunPostgresL1)} ops/sec (${formatRatio(row.bunPostgresL1, row.nodeRedis)} vs Redis).`;
 }
 
 function markdown(results: BenchResult[]): string {
@@ -94,7 +96,7 @@ function markdown(results: BenchResult[]): string {
   const details = results.map((result) =>
     `| ${result.operation} | ${result.backend} | ${result.iterations} | ${result.concurrency} | ${formatNumber(result.durationMs)} | ${formatNumber(result.opsPerSecond)} |`
   );
-  const l1Rows = l1SummaryRows(rows);
+  const hotL1 = hotReadL1Row(rows);
 
   return [
     "# Benchmark",
@@ -110,29 +112,21 @@ function markdown(results: BenchResult[]): string {
     "- The benchmark workflow runs PostgreSQL 18 with asynchronous I/O enabled via `io_method=worker`.",
     "- The workflow gives both service containers `--cpus 2 --memory 2g`.",
     "- Node.js tests run with `node`; Bun.js tests run with `bun`.",
-    "- PostgreSQL baseline tests use `@postgresx/noredis` with local L1 disabled so reads hit PostgreSQL.",
-    "- Rows labeled `(L1)` enable the in-process pgredis L1 cache for the hot-read case. This represents the app-cache path, while non-L1 rows represent PostgreSQL as the remote L2 store.",
+    "- Main comparison rows use `@postgresx/noredis` with local L1 disabled, so reads hit PostgreSQL. This compares Redis as a service with PostgreSQL as a service.",
+    "- L1 is enabled only for the hot-read note and details rows, because it measures an in-process application cache rather than the PostgreSQL service itself.",
     "- PostgreSQL tables created by pgredis are `UNLOGGED` by default for cache-like workloads, and the workflow sets `synchronous_commit=off` for the benchmark database. Both choices trade crash-time recency guarantees for cache throughput.",
     "",
-    "## Remote L2 Baseline",
+    "## Summary",
     "",
-    "These rows compare Redis with PostgreSQL when every pgredis read reaches PostgreSQL. This isolates database/driver cost.",
+    "Ops/sec is higher-is-better. The main table keeps pgredis L1 disabled to avoid mixing service-level backend performance with in-process cache hits.",
     "",
     "| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL ops/sec | Node/Postgres vs Redis | Bun.js + PostgreSQL ops/sec | Bun/Postgres vs Redis |",
     "| --- | ---: | ---: | ---: | ---: | ---: |",
     ...remoteSummaryRows(rows),
     "",
-    "## Local L1 Hot Cache",
+    "## L1 Hot-Read Note",
     "",
-    "These rows enable pgredis L1 for the hot-read workload. This is the fair cache-comparison path when replacing Redis as an application cache.",
-    "",
-    ...(l1Rows.length > 0
-      ? [
-          "| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL L1 ops/sec | Node/Postgres L1 vs Redis | Bun.js + PostgreSQL L1 ops/sec | Bun/Postgres L1 vs Redis |",
-          "| --- | ---: | ---: | ---: | ---: | ---: |",
-          ...l1Rows
-        ]
-      : ["No L1-specific rows were generated."]),
+    l1Note(hotL1),
     "",
     "## Details",
     "",
@@ -144,7 +138,7 @@ function markdown(results: BenchResult[]): string {
     "",
     "- Redis tests use key prefixes and do not flush the whole database.",
     "- PostgreSQL tests create temporary benchmark tables and drop them at the end.",
-    "- L1 rows are intentionally separated from remote L2 rows because they measure different architectures.",
+    "- PostgreSQL `(L1)` detail rows are informational only and are intentionally excluded from the main comparison table.",
     "- Numbers are intended for regression tracking, not universal database sizing.",
     "",
     "References behind benchmark design:",
@@ -164,27 +158,17 @@ function readResults(raw: string): BenchResult[] {
 
 function readmeSummary(results: BenchResult[]): string {
   const rows = comparisonRows(results);
-  const l1Rows = l1SummaryRows(rows);
+  const hotL1 = hotReadL1Row(rows);
 
   return [
     "<!-- BENCHMARK:START -->",
-    "Latest benchmark summary, generated by the manual GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. PostgreSQL L1 rows enable the local pgredis hot cache. See [benchmark.md](./benchmark.md) for full timings and notes.",
-    "",
-    "Remote L2 baseline:",
+    "Latest benchmark summary, generated by the GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. Main PostgreSQL rows keep pgredis L1 disabled so reads hit PostgreSQL. See [benchmark.md](./benchmark.md) for full timings and notes.",
     "",
     "| Operation | Redis ops/sec | Node/Postgres ops/sec | Node/Postgres vs Redis | Bun/Postgres ops/sec | Bun/Postgres vs Redis |",
     "| --- | ---: | ---: | ---: | ---: | ---: |",
     ...remoteSummaryRows(rows),
     "",
-    "Local L1 hot cache:",
-    "",
-    ...(l1Rows.length > 0
-      ? [
-          "| Operation | Redis ops/sec | Node/Postgres L1 ops/sec | Node/Postgres L1 vs Redis | Bun/Postgres L1 ops/sec | Bun/Postgres L1 vs Redis |",
-          "| --- | ---: | ---: | ---: | ---: | ---: |",
-          ...l1Rows
-        ]
-      : ["No L1-specific rows were generated."]),
+    l1Note(hotL1, true),
     "<!-- BENCHMARK:END -->"
   ].join("\n");
 }
