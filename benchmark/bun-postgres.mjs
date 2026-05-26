@@ -5,7 +5,8 @@ import { createBunSqlAdapter } from "../packages/pgredis/dist/adapters/bun.js";
 import {
   dropBenchmarkTables,
   readPositiveInteger,
-  runPgredisCases
+  runPgredisCases,
+  runPgredisL1Cases
 } from "./common.mjs";
 
 const iterations = readPositiveInteger("BENCHMARK_ITERATIONS", 2000);
@@ -22,9 +23,18 @@ const pg = createPgredis({
   tablePrefix,
   cache: { l1: false, notify: false }
 });
+const pgL1 = createPgredis({
+  sql,
+  namespace: `${runId}:bun`,
+  tablePrefix,
+  cache: { l1: { max: Math.max(iterations, concurrency), ttlMs: 60_000 }, notify: false }
+});
 
 try {
-  const results = await runPgredisCases(pg, "Bun.js + PostgreSQL", tablePrefix, iterations, concurrency);
+  const results = [
+    ...(await runPgredisCases(pg, "Bun.js + PostgreSQL", tablePrefix, iterations, concurrency)),
+    ...(await runPgredisL1Cases(pgL1, "Bun.js + PostgreSQL (L1)", iterations, concurrency))
+  ];
   await writeFile(process.env.BENCHMARK_OUTPUT || "benchmark-bun.json", JSON.stringify(results, null, 2));
 } finally {
   await dropBenchmarkTables(sql, tablePrefix).catch(() => undefined);

@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 
 interface BenchResult {
   operation: string;
-  backend: "Node.js + Redis" | "Node.js + PostgreSQL" | "Bun.js + PostgreSQL";
+  backend: "Node.js + Redis" | "Node.js + PostgreSQL" | "Node.js + PostgreSQL (L1)" | "Bun.js + PostgreSQL" | "Bun.js + PostgreSQL (L1)";
   iterations: number;
   concurrency: number;
   durationMs: number;
@@ -17,8 +17,9 @@ interface ComparisonRow {
   operation: string;
   nodeRedis: BenchResult | null;
   nodePostgres: BenchResult | null;
+  nodePostgresL1: BenchResult | null;
   bunPostgres: BenchResult | null;
-  fastest: BenchResult | null;
+  bunPostgresL1: BenchResult | null;
 }
 
 const exec = promisify(execFile);
@@ -65,25 +66,35 @@ function comparisonRows(results: BenchResult[]): ComparisonRow[] {
       operation,
       nodeRedis: results.find((item) => item.operation === operation && item.backend === "Node.js + Redis") ?? null,
       nodePostgres: results.find((item) => item.operation === operation && item.backend === "Node.js + PostgreSQL") ?? null,
+      nodePostgresL1: results.find((item) => item.operation === operation && item.backend === "Node.js + PostgreSQL (L1)") ?? null,
       bunPostgres: results.find((item) => item.operation === operation && item.backend === "Bun.js + PostgreSQL") ?? null,
-      fastest: null as BenchResult | null
+      bunPostgresL1: results.find((item) => item.operation === operation && item.backend === "Bun.js + PostgreSQL (L1)") ?? null
     };
-    row.fastest = [row.nodeRedis, row.nodePostgres, row.bunPostgres]
-      .filter((item): item is BenchResult => item !== null)
-      .sort((a, b) => b.opsPerSecond - a.opsPerSecond)[0] ?? null;
     return row;
   });
+}
+
+function remoteSummaryRows(rows: ComparisonRow[]): string[] {
+  return rows.map((row) =>
+    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} |`
+  );
+}
+
+function l1SummaryRows(rows: ComparisonRow[]): string[] {
+  return rows
+    .filter((row) => row.nodePostgresL1 || row.bunPostgresL1)
+    .map((row) =>
+      `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
+    );
 }
 
 function markdown(results: BenchResult[]): string {
   const generatedAt = new Date().toISOString();
   const rows = comparisonRows(results);
-  const comparison = rows.map((row) =>
-    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} | ${row.fastest?.backend ?? "-"} |`
-  );
   const details = results.map((result) =>
     `| ${result.operation} | ${result.backend} | ${result.iterations} | ${result.concurrency} | ${formatNumber(result.durationMs)} | ${formatNumber(result.opsPerSecond)} |`
   );
+  const l1Rows = l1SummaryRows(rows);
 
   return [
     "# Benchmark",
@@ -99,15 +110,29 @@ function markdown(results: BenchResult[]): string {
     "- The benchmark workflow runs PostgreSQL 18 with asynchronous I/O enabled via `io_method=worker`.",
     "- The workflow gives both service containers `--cpus 2 --memory 2g`.",
     "- Node.js tests run with `node`; Bun.js tests run with `bun`.",
-    "- PostgreSQL tests use `@postgresx/noredis` with the local L1 cache disabled so reads hit PostgreSQL.",
+    "- PostgreSQL baseline tests use `@postgresx/noredis` with local L1 disabled so reads hit PostgreSQL.",
+    "- Rows labeled `(L1)` enable the in-process pgredis L1 cache for the hot-read case. This represents the app-cache path, while non-L1 rows represent PostgreSQL as the remote L2 store.",
+    "- PostgreSQL tables created by pgredis are `UNLOGGED` by default for cache-like workloads, and the workflow sets `synchronous_commit=off` for the benchmark database. Both choices trade crash-time recency guarantees for cache throughput.",
     "",
-    "## Summary",
+    "## Remote L2 Baseline",
     "",
-    "Ops/sec is higher-is-better. Ratios compare each PostgreSQL backend against the Node.js + Redis baseline for the same operation.",
+    "These rows compare Redis with PostgreSQL when every pgredis read reaches PostgreSQL. This isolates database/driver cost.",
     "",
-    "| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL ops/sec | Node/Postgres vs Redis | Bun.js + PostgreSQL ops/sec | Bun/Postgres vs Redis | Fastest |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
-    ...comparison,
+    "| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL ops/sec | Node/Postgres vs Redis | Bun.js + PostgreSQL ops/sec | Bun/Postgres vs Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ...remoteSummaryRows(rows),
+    "",
+    "## Local L1 Hot Cache",
+    "",
+    "These rows enable pgredis L1 for the hot-read workload. This is the fair cache-comparison path when replacing Redis as an application cache.",
+    "",
+    ...(l1Rows.length > 0
+      ? [
+          "| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL L1 ops/sec | Node/Postgres L1 vs Redis | Bun.js + PostgreSQL L1 ops/sec | Bun/Postgres L1 vs Redis |",
+          "| --- | ---: | ---: | ---: | ---: | ---: |",
+          ...l1Rows
+        ]
+      : ["No L1-specific rows were generated."]),
     "",
     "## Details",
     "",
@@ -119,7 +144,15 @@ function markdown(results: BenchResult[]): string {
     "",
     "- Redis tests use key prefixes and do not flush the whole database.",
     "- PostgreSQL tests create temporary benchmark tables and drop them at the end.",
-    "- Numbers are intended for regression tracking, not universal database sizing."
+    "- L1 rows are intentionally separated from remote L2 rows because they measure different architectures.",
+    "- Numbers are intended for regression tracking, not universal database sizing.",
+    "",
+    "References behind benchmark design:",
+    "",
+    "- PostgreSQL `UNLOGGED` tables reduce WAL work for cache-like data, with crash-safety and replication trade-offs: https://www.postgresql.org/docs/current/sql-createtable.html",
+    "- `synchronous_commit=off` can improve throughput for noncritical transactions while risking loss of recent acknowledged commits after a crash: https://www.postgresql.org/docs/current/runtime-config-wal.html",
+    "- PostgreSQL pipeline mode reduces client/server round trips by sending multiple queries before reading prior results: https://www.postgresql.org/docs/current/libpq-pipeline-mode.html",
+    "- PostgreSQL bulk-loading guidance favors batching, transactions, prepared statements, and COPY over many independent INSERTs: https://www.postgresql.org/docs/current/populate.html"
   ].join("\n") + "\n";
 }
 
@@ -130,17 +163,28 @@ function readResults(raw: string): BenchResult[] {
 }
 
 function readmeSummary(results: BenchResult[]): string {
-  const rows = comparisonRows(results).map((row) =>
-    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} | ${row.fastest?.backend ?? "-"} |`
-  );
+  const rows = comparisonRows(results);
+  const l1Rows = l1SummaryRows(rows);
 
   return [
     "<!-- BENCHMARK:START -->",
-    "Latest benchmark summary, generated by the manual GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. See [benchmark.md](./benchmark.md) for full timings and notes.",
+    "Latest benchmark summary, generated by the manual GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. PostgreSQL L1 rows enable the local pgredis hot cache. See [benchmark.md](./benchmark.md) for full timings and notes.",
     "",
-    "| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL ops/sec | Node/Postgres vs Redis | Bun.js + PostgreSQL ops/sec | Bun/Postgres vs Redis | Fastest |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
-    ...rows,
+    "Remote L2 baseline:",
+    "",
+    "| Operation | Redis ops/sec | Node/Postgres ops/sec | Node/Postgres vs Redis | Bun/Postgres ops/sec | Bun/Postgres vs Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ...remoteSummaryRows(rows),
+    "",
+    "Local L1 hot cache:",
+    "",
+    ...(l1Rows.length > 0
+      ? [
+          "| Operation | Redis ops/sec | Node/Postgres L1 ops/sec | Node/Postgres L1 vs Redis | Bun/Postgres L1 ops/sec | Bun/Postgres L1 vs Redis |",
+          "| --- | ---: | ---: | ---: | ---: | ---: |",
+          ...l1Rows
+        ]
+      : ["No L1-specific rows were generated."]),
     "<!-- BENCHMARK:END -->"
   ].join("\n");
 }

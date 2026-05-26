@@ -7,6 +7,7 @@ import {
   dropBenchmarkTables,
   readPositiveInteger,
   runPgredisCases,
+  runPgredisL1Cases,
   runRedisCases
 } from "./common.mjs";
 
@@ -29,12 +30,19 @@ const pg = createPgredis({
   tablePrefix,
   cache: { l1: false, notify: false }
 });
+const pgL1 = createPgredis({
+  sql,
+  namespace: `${runId}:node`,
+  tablePrefix,
+  cache: { l1: { max: Math.max(iterations, concurrency), ttlMs: 60_000 }, notify: false }
+});
 
 try {
   await redis.connect();
   const results = [
     ...(await runRedisCases(redis, "Node.js + Redis", redisPrefix, iterations, concurrency)),
-    ...(await runPgredisCases(pg, "Node.js + PostgreSQL", tablePrefix, iterations, concurrency))
+    ...(await runPgredisCases(pg, "Node.js + PostgreSQL", tablePrefix, iterations, concurrency)),
+    ...(await runPgredisL1Cases(pgL1, "Node.js + PostgreSQL (L1)", iterations, concurrency))
   ];
   await writeFile(process.env.BENCHMARK_OUTPUT || "benchmark-node.json", JSON.stringify(results, null, 2));
 } finally {
