@@ -13,7 +13,7 @@ function uniqueName(prefix: string): string {
 }
 
 async function dropTables(sql: ReturnType<typeof createPgAdapter>, tablePrefix: string): Promise<void> {
-  const names = ["kv", "counter", "hash", "set", "list", "sorted_set", "rate_limit"].map((name) => `${tablePrefix}_${name}`);
+  const names = ["kv", "counter", "hash", "set", "list", "sorted_set", "rate_limit", "outbox"].map((name) => `${tablePrefix}_${name}`);
   for (const name of names) {
     await sql.unsafe(`DROP TABLE IF EXISTS ${quoteIdentifier(name)} CASCADE`);
   }
@@ -76,6 +76,66 @@ describe("PostgreSQL integration", () => {
       await expect(client.rateLimit?.hit("user:1")).resolves.toMatchObject({ allowed: true, remaining: 1 });
       await expect(client.rateLimit?.hit("user:1")).resolves.toMatchObject({ allowed: true, remaining: 0 });
       await expect(client.rateLimit?.hit("user:1")).resolves.toMatchObject({ allowed: false });
+    } finally {
+      await dropTables(sql, tablePrefix).catch(() => undefined);
+      await sql.close();
+    }
+  });
+
+  integrationTest("supports KV conditionals, pipeline aliases, outbox stream, and metrics", async () => {
+    const sql = createPgAdapter(databaseUrl!);
+    const namespace = uniqueName("ns");
+    const tablePrefix = uniqueName("pgredis_it");
+    const client = createPgredis({ sql, namespace, tablePrefix });
+
+    try {
+      await client.ensureSchema();
+
+      await expect(client.cache.set("feature", "a", { nx: true })).resolves.toBe(true);
+      await expect(client.cache.set("feature", "b", { nx: true })).resolves.toBe(false);
+      await expect(client.cache.get("feature")).resolves.toBe("a");
+      await expect(client.cache.set("missing", "x", { xx: true })).resolves.toBe(false);
+      await expect(client.cache.compareAndSwap("feature", "a", "c")).resolves.toBe(true);
+      await expect(client.cache.compareAndSwap("feature", "a", "d")).resolves.toBe(false);
+      await expect(client.cache.expire("feature", 60_000)).resolves.toBe(true);
+      await expect(client.cache.ttl("feature")).resolves.toBeGreaterThan(0);
+      await expect(client.cache.persist("feature")).resolves.toBe(true);
+      await expect(client.cache.ttl("feature")).resolves.toBeNull();
+
+      const batchResult = await client.batch(async (pg) => {
+        await pg.cache.set("batch", { ok: true });
+        return pg.cache.get<{ ok: boolean }>("batch");
+      });
+      expect(batchResult).toEqual({ ok: true });
+
+      await expect(
+        client.pipeline()
+          .set("pipe", 1)
+          .get<number>("pipe")
+          .incr("pipe-counter")
+          .exec()
+      ).resolves.toEqual([true, 1, 1]);
+
+      await expect(client.redis.set("alias", "value", { NX: true })).resolves.toBe("OK");
+      await expect(client.redis.set("alias", "next", { NX: true })).resolves.toBeNull();
+      await expect(client.redis.get("alias")).resolves.toBe("value");
+
+      const id = await client.outbox.append("events", { kind: "created" });
+      await expect(client.outbox.read("events")).resolves.toMatchObject([
+        { id, stream: "events", payload: { kind: "created" }, processedAt: null }
+      ]);
+      const claimed = await client.outbox.claim<{ kind: string }>("events", "worker-a");
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]).toMatchObject({ id, consumer: "worker-a", deliveryCount: 1 });
+      await expect(client.outbox.ack([id])).resolves.toBe(1);
+      await expect(client.outbox.pending("events")).resolves.toEqual({ pending: 0, locked: 0 });
+      await expect(client.outbox.trim({ stream: "events", limit: 10 })).resolves.toBe(1);
+
+      await client.cache.set("expired", "value", { ttlMs: 0, notify: false });
+      await expect(client.cleanupExpired()).resolves.toMatchObject({ cache: 1 });
+      const metrics = await client.metrics();
+      expect(metrics.cleanup?.totalDeleted).toBeGreaterThanOrEqual(1);
+      expect(metrics.tables.some((table) => table.tableName === `${tablePrefix}_kv`)).toBe(true);
     } finally {
       await dropTables(sql, tablePrefix).catch(() => undefined);
       await sql.close();

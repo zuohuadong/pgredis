@@ -8,8 +8,10 @@ replacement, not Redis protocol or command compatibility.
 
 This repository publishes two packages:
 
-- `@postgresx/noredis`: KV/TTL cache, collections, counters, advisory locks, rate limiting,
-  PostgreSQL pub/sub helpers, and a thin `pg-boss` queue wrapper.
+- `@postgresx/noredis`: KV/TTL cache with conditional writes, collections, counters,
+  advisory locks, rate limiting, PostgreSQL pub/sub helpers, durable outbox/stream,
+  Redis-style migration aliases, web adapters, production metrics, and a thin
+  `pg-boss` queue wrapper.
 - `@postgresx/bun-listen`: a Bun-native PostgreSQL `LISTEN/NOTIFY` client using
   `Bun.connect()`. It is a subpackage and can be installed independently.
 
@@ -45,7 +47,9 @@ const redis = createPgredis({ sql, namespace: "app" });
 
 await redis.ensureSchema();
 await redis.cache.set("session:abc", { userId: 1 }, { ttlMs: 60_000 });
+await redis.cache.set("session:abc", { userId: 2 }, { nx: true });
 const session = await redis.cache.get<{ userId: number }>("session:abc");
+await redis.pipeline().set("cache:warm", true).get("cache:warm").exec();
 ```
 
 Bun realtime `LISTEN/NOTIFY`:
@@ -136,6 +140,18 @@ await queue.start();
 await queue.send("webhook.deliver", { id: "evt_1" });
 ```
 
+Durable outbox/stream and migration aliases:
+
+```ts
+const id = await redis.outbox.append("billing.events", { invoiceId: "inv_1" });
+const messages = await redis.outbox.claim("billing.events", "worker-a");
+await redis.outbox.ack(messages.map((message) => message.id));
+
+await redis.redis.set("session:abc", { userId: 1 }, { PX: 60_000, NX: true });
+await redis.redis.blpop("worker:list", 5);
+await redis.metrics();
+```
+
 ## Development
 
 ```bash
@@ -208,29 +224,29 @@ Redis protocol or supporting every Redis command.
 | --- | --- | --- | --- |
 | Protocol and command surface | Sends Redis commands and supports arbitrary Redis command methods. | Exposes typed PostgreSQL-backed primitives only. | Migration requires code changes. Redis command compatibility is intentionally out of scope. |
 | Runtime dependency | Requires Redis, Redis-compatible service, or Redis Cluster/Sentinel. | Requires PostgreSQL; optional `pg`, `pg-boss`, or `@postgresx/bun-listen` only for selected features. | Good fit for teams removing a separate Redis tier. |
-| Strings / KV / TTL | Full Redis string command surface. | JSONB KV cache with TTL, batch get/set, prefix clear, optional local L1 cache, and notification invalidation. | Covers cache/session-style values, but not byte-string commands such as `APPEND`, `GETRANGE`, or `SETRANGE`. |
-| Hashes, lists, sets, sorted sets | Native Redis data structures and command coverage. | PostgreSQL table-backed helpers for common hash/list/set/zset operations. | Covers common app usage; advanced/blocking/list mutation and full command parity are not complete. |
+| Strings / KV / TTL | Full Redis string command surface. | JSONB KV cache with TTL, batch get/set, prefix clear, optional local L1 cache, notification invalidation, `NX`/`XX`, CAS, `expire`, `persist`, `touch`, and pluggable serialization. | Covers cache/session-style values, but not byte-string commands such as `APPEND`, `GETRANGE`, or `SETRANGE`. |
+| Hashes, lists, sets, sorted sets | Native Redis data structures and command coverage. | PostgreSQL table-backed helpers for common hash/list/set/zset operations. | Covers common app usage; list blocking pop is a polling migration bridge, not a scheduler. |
 | Pub/Sub | Redis Pub/Sub, pattern subscriptions, binary messages, cluster behavior. | PostgreSQL `LISTEN/NOTIFY` publisher and Node/Bun listeners. | Good for lightweight invalidation/events; not durable and limited by PostgreSQL NOTIFY payload size. |
-| Streams / consumer groups | Redis Streams commands such as `XADD` and consumer groups. | No Redis Streams API; queues are delegated to `pg-boss`. | Add a durable outbox/stream API if event-log semantics are required. |
-| Pipelining / transactions | `pipeline`, `multi`, `exec`, and cluster-aware behavior. | Batch helpers exist for some primitives; no generic pipeline or Redis-style transaction facade. | Add a pgredis batch/pipeline facade for migration ergonomics. |
+| Streams / consumer groups | Redis Streams commands such as `XADD` and consumer groups. | Durable outbox/stream helper plus `pg-boss` queue adapter. | No Redis consumer-group protocol or pending-entry-list compatibility. |
+| Pipelining / transactions | `pipeline`, `multi`, `exec`, and cluster-aware behavior. | `batch()` uses SQL adapter transactions when available; `pipeline()` executes ordered pgredis operations. | No Redis wire-level pipeline or `WATCH` semantics. |
 | Lua scripting / Redis Functions | Supports scripting commands and custom command definitions. | Out of scope; use SQL, stored procedures, or application code. | Do not port Lua directly; rewrite as SQL/app logic. |
 | Cluster / Sentinel / NAT mapping | Built into ioredis. | Inherited from PostgreSQL HA, pooling, and networking. | Document PostgreSQL deployment assumptions instead of Redis HA options. |
 | TLS / ACL / auth | Redis connection, TLS, and ACL options. | Delegated to PostgreSQL driver, DSN, and database roles. | Use PostgreSQL credentials and transport settings. |
 | Redis Stack modules | Can send module commands, depending on Redis server support. | No RedisJSON, RediSearch, RedisTimeSeries, RedisBloom facade. | Prefer PostgreSQL JSONB, full-text search, pgvector, PostGIS, or extensions. |
 | Offline queue / reconnect strategy | Client-level offline queue, retry, ready checks, auto-resubscribe. | Node/Bun listeners include reconnect and health state; SQL operations depend on the database adapter/pool behavior. | Add operation-level retry guidance and adapter smoke tests. |
 
-## Feature backlog
+## Migration feature status
 
-Highest-value features to add next:
+The highest-value Redis migration features now have first-pass APIs and tests:
 
-1. PostgreSQL integration test suite and tarball install smoke tests.
-2. Generic `batch()` or `pipeline()` facade for grouping pgredis operations.
-3. Durable outbox/stream API for applications that currently use Redis Streams.
-4. Blocking list pop or explicit queue-first migration guidance for worker pulls.
-5. Production metrics for table sizes, cleanup counts, TTL backlog, listener reconnects, and queue lag.
-6. Redis-style migration aliases for the most common commands, without claiming protocol compatibility.
-7. Framework adapters such as session stores for Express/Fastify/Elysia and cache helpers for common web stacks.
-8. More KV options: `set` NX/XX semantics, compare-and-swap, touch/expire helpers, and configurable serialization.
+1. PostgreSQL integration tests and tarball install smoke tests.
+2. `batch()` and `pipeline()` grouping facade.
+3. Durable outbox/stream API for Redis Streams-style event-log migrations.
+4. Polling `blpop()` / `brpop()` list helpers plus queue-first migration guidance.
+5. Production metrics for table sizes, cleanup counts, TTL backlog, listener health, and queue state.
+6. Redis-style aliases for common commands, without claiming protocol compatibility.
+7. Framework-neutral session stores and cache helpers under `@postgresx/noredis/adapters/web`.
+8. KV `NX`/`XX`, compare-and-swap, `touch`, `expire`, `persist`, and configurable serialization.
 
 ---
 

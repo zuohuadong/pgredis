@@ -12,6 +12,7 @@ Redis infrastructure use cases with PostgreSQL-friendly primitives.
 It provides:
 
 - KV/TTL cache
+- KV conditional writes: `NX`/`XX`, compare-and-swap, `expire`, `persist`, `touch`, and pluggable serialization
 - atomic counters
 - hash, set, list, and sorted-set helpers
 - cursor-style scans and structure-level TTL for collection helpers
@@ -19,7 +20,10 @@ It provides:
 - transaction-scoped advisory locks
 - fixed-window, sliding-window, and token-bucket rate limiting
 - a simple `pg-boss` queue adapter for background jobs and long tasks
-- a `createPgredis()` facade for one-shot initialization, health, stats, and cleanup
+- a durable outbox/stream helper for event-log style processing
+- Redis-style migration aliases for common commands, without protocol compatibility claims
+- framework-neutral session stores and cache helpers for Express/Fastify/Elysia-style stacks
+- a `createPgredis()` facade for one-shot initialization, `batch()`/`pipeline()`, health, stats, metrics, and cleanup
 
 ## Installation
 
@@ -127,6 +131,30 @@ const cache = createPgKvCache({
 await cache.ensureSchema();
 await cache.set("token:abc", { userId: 1 }, { ttlMs: 60_000 });
 const value = await cache.get<{ userId: number }>("token:abc");
+
+await cache.set("token:abc", { userId: 2 }, { nx: true }); // only when missing
+await cache.set("token:abc", { userId: 3 }, { xx: true }); // only when present
+await cache.compareAndSwap("token:abc", { userId: 3 }, { userId: 4 });
+await cache.expire("token:abc", 60_000);
+await cache.persist("token:abc");
+await cache.touch("token:abc");
+```
+
+Use `serializer` when values need an application envelope before they are stored
+as JSONB:
+
+```ts
+const cache = createPgKvCache({
+  sql,
+  serializer: {
+    serialize(value) {
+      return { v: 1, value };
+    },
+    deserialize(row) {
+      return (row as { value: unknown }).value;
+    }
+  }
+});
 ```
 
 ## Unified client
@@ -156,8 +184,39 @@ await pg.hash.expire("session:abc", 60_000);
 await pg.hash.hscan("session:abc", null, 100);
 await pg.health();
 await pg.stats();
+await pg.metrics();
 const stopCleanup = pg.startCleanupWorker({ intervalMs: 60_000 });
 ```
+
+`batch()` runs a callback inside the SQL adapter transaction when the adapter
+supports `begin()`. `pipeline()` is an ergonomic ordered-operation facade for
+migration work; it is not a Redis wire protocol pipeline.
+
+```ts
+const result = await pg.batch(async (tx) => {
+  await tx.cache.set("session:abc", { userId: 1 });
+  return tx.cache.get("session:abc");
+});
+
+const results = await pg.pipeline()
+  .set("counter-cache", 1)
+  .get("counter-cache")
+  .incr("daily:requests")
+  .exec();
+```
+
+Common Redis-style aliases are available under `pg.redis` for migration
+ergonomics:
+
+```ts
+await pg.redis.set("session:abc", { userId: 1 }, { PX: 60_000, NX: true });
+await pg.redis.get("session:abc");
+await pg.redis.hset("profile:1", "name", "Ada");
+await pg.redis.blpop("worker:list", 5);
+```
+
+These aliases call typed pgredis primitives and do not make the package Redis
+protocol compatible.
 
 ## Pub/Sub
 
@@ -189,6 +248,55 @@ createPgNodeListener(process.env.DATABASE_URL!, {
     console.log(payload);
   }
 });
+```
+
+## Durable outbox / stream
+
+Use `PgOutboxStream` when an application previously used Redis Streams for a
+durable event log or worker inbox. It intentionally exposes PostgreSQL outbox
+semantics instead of Redis consumer-group compatibility.
+
+```ts
+await pg.outbox.append("billing.events", { invoiceId: "inv_1" });
+
+const messages = await pg.outbox.claim("billing.events", "worker-a", {
+  limit: 10,
+  visibilityTimeoutMs: 30_000
+});
+
+for (const message of messages) {
+  await deliver(message.payload);
+  await pg.outbox.ack([message.id]);
+}
+```
+
+For job queues, retries, and scheduling, prefer the `pg-boss` queue adapter.
+Use list `blpop()` / `brpop()` only as a migration bridge for simple worker
+pulls; it polls PostgreSQL and is not a queue scheduler.
+
+## Web adapters
+
+The web adapter subpath has no Express, Fastify, or Elysia runtime dependency.
+It exports framework-neutral helpers that match common session-store and
+read-through cache shapes:
+
+```ts
+import {
+  createElysiaSessionStore,
+  createPgredisCacheHelpers
+} from "@postgresx/noredis/adapters/web";
+
+const sessions = createElysiaSessionStore(pg.cache, {
+  prefix: "sess:",
+  ttlMs: 24 * 60 * 60 * 1000
+});
+
+const cache = createPgredisCacheHelpers(pg.cache, {
+  prefix: "http:",
+  ttlMs: 60_000
+});
+
+const profile = await cache.wrap("profile:1", () => loadProfile("1"));
 ```
 
 ## Advisory lock
@@ -257,7 +365,8 @@ npm install @postgresx/noredis pg-boss
 
 This covers Redis-backed background job use cases such as Bull-style async
 webhooks, billing flushes, retries, and long tasks. It does not emulate Redis
-Streams commands.
+Streams commands. Use `pg.outbox` for event-log processing and `pg.queue` for
+queue-first worker migration.
 
 ## Launch readiness
 
@@ -291,11 +400,11 @@ Redis protocol or supporting every Redis command.
 | --- | --- | --- | --- |
 | Protocol and command surface | Sends Redis commands and supports arbitrary Redis command methods. | Exposes typed PostgreSQL-backed primitives only. | Migration requires code changes. Redis command compatibility is intentionally out of scope. |
 | Runtime dependency | Requires Redis, Redis-compatible service, or Redis Cluster/Sentinel. | Requires PostgreSQL; optional `pg`, `pg-boss`, or `@postgresx/bun-listen` only for selected features. | Good fit for teams removing a separate Redis tier. |
-| Strings / KV / TTL | Full Redis string command surface. | JSONB KV cache with TTL, batch get/set, prefix clear, optional local L1 cache, and notification invalidation. | Covers cache/session-style values, but not byte-string commands such as `APPEND`, `GETRANGE`, or `SETRANGE`. |
-| Hashes, lists, sets, sorted sets | Native Redis data structures and command coverage. | PostgreSQL table-backed helpers for common hash/list/set/zset operations. | Covers common app usage; advanced/blocking/list mutation and full command parity are not complete. |
+| Strings / KV / TTL | Full Redis string command surface. | JSONB KV cache with TTL, batch get/set, prefix clear, optional local L1 cache, notification invalidation, `NX`/`XX`, CAS, `expire`, `persist`, `touch`, and pluggable serialization. | Covers cache/session-style values, but not byte-string commands such as `APPEND`, `GETRANGE`, or `SETRANGE`. |
+| Hashes, lists, sets, sorted sets | Native Redis data structures and command coverage. | PostgreSQL table-backed helpers for common hash/list/set/zset operations. | Covers common app usage; list blocking pop is a polling migration bridge, not a scheduler. |
 | Pub/Sub | Redis Pub/Sub, pattern subscriptions, binary messages, cluster behavior. | PostgreSQL `LISTEN/NOTIFY` publisher and Node/Bun listeners. | Good for lightweight invalidation/events; not durable and limited by PostgreSQL NOTIFY payload size. |
-| Streams / consumer groups | Redis Streams commands such as `XADD` and consumer groups. | No Redis Streams API; queues are delegated to `pg-boss`. | Add a durable outbox/stream API if event-log semantics are required. |
-| Pipelining / transactions | `pipeline`, `multi`, `exec`, and cluster-aware behavior. | Batch helpers exist for some primitives; no generic pipeline or Redis-style transaction facade. | Add a pgredis batch/pipeline facade for migration ergonomics. |
+| Streams / consumer groups | Redis Streams commands such as `XADD` and consumer groups. | Durable outbox/stream helper plus `pg-boss` queue adapter. | No Redis consumer-group protocol or pending-entry-list compatibility. |
+| Pipelining / transactions | `pipeline`, `multi`, `exec`, and cluster-aware behavior. | `batch()` uses SQL adapter transactions when available; `pipeline()` executes ordered pgredis operations. | No Redis wire-level pipeline or `WATCH` semantics. |
 | Lua scripting / Redis Functions | Supports scripting commands and custom command definitions. | Out of scope; use SQL, stored procedures, or application code. | Do not port Lua directly; rewrite as SQL/app logic. |
 | Cluster / Sentinel / NAT mapping | Built into ioredis. | Inherited from PostgreSQL HA, pooling, and networking. | Document PostgreSQL deployment assumptions instead of Redis HA options. |
 | TLS / ACL / auth | Redis connection, TLS, and ACL options. | Delegated to PostgreSQL driver, DSN, and database roles. | Use PostgreSQL credentials and transport settings. |
@@ -312,7 +421,7 @@ feature replacement, not command compatibility.
 | --- | --- | --- | --- |
 | String `GET`/`SET`/`DEL`/TTL | Covered | `PgKvCache` stores JSONB values with optional TTL and L1 cache | No byte-level Redis string ops such as `APPEND`, `GETRANGE`, `SETRANGE` |
 | Key expiration | Covered | `expires_at`, `cleanupExpired`, L1 TTL | No Redis passive/active eviction semantics or keyspace notifications |
-| Batch get/set | Covered | `mget`, `mset` | No pipelining API yet |
+| Batch get/set | Covered | `mget`, `mset`, `batch()`, and `pipeline()` | Pipeline groups pgredis operations, not Redis commands |
 | Atomic counters | Covered | `PgCounter` over BIGINT UPSERT | Integer counters only |
 | Pub/Sub | Covered | `LISTEN/NOTIFY` plus `createPgListener` | Not durable, payload size is limited by PostgreSQL NOTIFY |
 | Distributed locks | Covered | Transaction-scoped advisory locks | No Redlock-compatible lease renewal model |
@@ -321,11 +430,11 @@ feature replacement, not command compatibility.
 | Token-bucket rate limit | Covered | PostgreSQL row state with refill calculation | Designed for app-level API throttling |
 | Queues / delayed jobs / retries | Covered via adapter | `pg-boss` wrapper | Not Redis Streams compatible |
 | Hashes | Covered | `PgHash` over `(namespace, key, field)` rows | `HSCAN`-style cursor scan and key TTL covered; no per-field TTL |
-| Lists | Covered | `PgList` over ordered rows | Cursor scan and key TTL covered; no blocking pop; use pg-boss for real job queues |
+| Lists | Covered | `PgList` over ordered rows | Cursor scan, key TTL, and polling `blpop`/`brpop`; use pg-boss for real job queues |
 | Sets | Covered | `PgSet` over unique-indexed rows | `SINTER`, `SUNION`, `SDIFF`, cursor scan, and key TTL covered |
 | Sorted sets | Covered | `PgSortedSet` over `(member, score)` rows | Rank, score range, count, pop-min, scan, and key TTL covered |
-| Streams / consumer groups | Delegated / missing | Use `pg-boss` for jobs; application table for event logs | No `XADD`, `XREADGROUP`, pending-entry list |
-| Transactions / optimistic watch | Missing | Use PostgreSQL transactions and row locks directly | No Redis `MULTI`/`EXEC`/`WATCH` facade |
+| Streams / consumer groups | Partially covered | Use `PgOutboxStream` for event logs and `pg-boss` for jobs | No Redis `XREADGROUP` or pending-entry-list compatibility |
+| Transactions / optimistic watch | Partially covered | Use `batch()` for adapter transactions; use PostgreSQL row locks directly for optimistic flows | No Redis `WATCH` facade |
 | Lua scripting / functions | Out of scope | Use SQL, stored procedures, or app code | No Redis Lua/function runtime |
 | Bitmaps / bitfields | Missing | Use `bytea`, roaring bitmap extension, or SQL tables | No bit operation API |
 | HyperLogLog | Missing | Use PostgreSQL extensions or approximate-count tables | No `PFADD`/`PFCOUNT` |
@@ -336,20 +445,21 @@ feature replacement, not command compatibility.
 | Bloom / Cuckoo / Count-Min | Missing | Use PostgreSQL extensions or app tables | No RedisBloom-compatible API |
 | ACL/auth | Out of scope | Use PostgreSQL credentials and application auth | No Redis ACL facade |
 | Persistence/replication/cluster | Out of scope | Inherited from PostgreSQL deployment | No Redis Cluster slot/hash semantics |
-| Server introspection | Partial | `createPgredis().health()` and `stats()` expose basic health/cache/queue stats | No Redis `INFO`, `MONITOR`, command stats facade |
+| Server introspection | Partial | `createPgredis().health()`, `stats()`, and `metrics()` expose health, cleanup, table size, TTL backlog, listener, and queue views | No Redis `INFO`, `MONITOR`, command stats facade |
 
 ## Missing pieces to consider next
 
-The highest-value additions for Redis replacement are now:
+The highest-value migration features now have first-pass APIs and tests:
+PostgreSQL integration coverage, tarball smoke tests, `batch()`/`pipeline()`,
+outbox/stream, list blocking-pop helpers, production metrics, Redis-style
+aliases, web adapters, and expanded KV write semantics.
 
-1. PostgreSQL integration test suite and tarball install smoke tests.
-2. Generic `batch()` or `pipeline()` facade for grouping pgredis operations.
-3. Durable outbox/stream API for applications that currently use Redis Streams.
-4. Blocking list pop or explicit queue-first migration guidance for worker pulls.
-5. Production metrics for table sizes, cleanup counts, TTL backlog, listener reconnects, and queue lag.
-6. Redis-style migration aliases for the most common commands, without claiming protocol compatibility.
-7. Framework adapters such as session stores for Express/Fastify/Elysia and cache helpers for common web stacks.
-8. More KV options: `set` NX/XX semantics, compare-and-swap, touch/expire helpers, and configurable serialization.
+Remaining candidates:
+
+1. Redis Streams consumer-group migration guide with side-by-side patterns for `XREADGROUP`, pending entries, and retries.
+2. More framework-specific examples for popular session middleware packages.
+3. Operation-level retry/backoff helpers for SQL adapters.
+4. Benchmark baselines for outbox, list pop, and pipeline workloads.
 
 ## Design notes
 
@@ -374,6 +484,7 @@ PostgreSQL-friendly semantics:
 功能包括：
 
 - KV/TTL 缓存
+- KV 条件写入：`NX`/`XX`、比较并交换、`expire`、`persist`、`touch` 和可插拔序列化
 - 原子计数器
 - 哈希、集合、列表和有序集合辅助函数
 - 游标式扫描和集合辅助函数的结构级 TTL
@@ -381,7 +492,10 @@ PostgreSQL-friendly semantics:
 - 事务作用域的咨询锁
 - 固定窗口、滑动窗口和令牌桶限流
 - 简单的 `pg-boss` 队列适配器，用于后台任务和长任务
-- `createPgredis()` 外观，用于一次性初始化、健康检查、统计和清理
+- 用于事件日志式处理的持久化 outbox/stream 辅助函数
+- 常见命令的 Redis 风格迁移别名，但不声明协议兼容
+- 面向 Express/Fastify/Elysia 风格栈的框架中立 session store 和 cache helper
+- `createPgredis()` 外观，用于一次性初始化、`batch()`/`pipeline()`、健康检查、统计、指标和清理
 
 ## 安装
 
@@ -487,6 +601,13 @@ const cache = createPgKvCache({
 await cache.ensureSchema();
 await cache.set("token:abc", { userId: 1 }, { ttlMs: 60_000 });
 const value = await cache.get<{ userId: number }>("token:abc");
+
+await cache.set("token:abc", { userId: 2 }, { nx: true });
+await cache.set("token:abc", { userId: 3 }, { xx: true });
+await cache.compareAndSwap("token:abc", { userId: 3 }, { userId: 4 });
+await cache.expire("token:abc", 60_000);
+await cache.persist("token:abc");
+await cache.touch("token:abc");
 ```
 
 ## 统一客户端
@@ -516,7 +637,26 @@ await pg.hash.expire("session:abc", 60_000);
 await pg.hash.hscan("session:abc", null, 100);
 await pg.health();
 await pg.stats();
+await pg.metrics();
 const stopCleanup = pg.startCleanupWorker({ intervalMs: 60_000 });
+```
+
+`batch()` 在 SQL 适配器支持 `begin()` 时会使用事务；`pipeline()` 是迁移时用于顺序分组 pgredis 操作的外观，不是 Redis 协议管道。
+
+```ts
+const result = await pg.batch(async (tx) => {
+  await tx.cache.set("session:abc", { userId: 1 });
+  return tx.cache.get("session:abc");
+});
+
+const results = await pg.pipeline()
+  .set("counter-cache", 1)
+  .get("counter-cache")
+  .incr("daily:requests")
+  .exec();
+
+await pg.redis.set("session:abc", { userId: 1 }, { PX: 60_000, NX: true });
+await pg.redis.blpop("worker:list", 5);
 ```
 
 ## Pub/Sub
@@ -547,6 +687,47 @@ createPgNodeListener(process.env.DATABASE_URL!, {
   onNotify(_channel, payload) {
     console.log(payload);
   }
+});
+```
+
+## 持久化 outbox / stream
+
+当应用过去用 Redis Streams 做持久化事件日志或 worker inbox 时，可以使用 `PgOutboxStream`。它暴露 PostgreSQL outbox 语义，不模拟 Redis consumer group 协议。
+
+```ts
+await pg.outbox.append("billing.events", { invoiceId: "inv_1" });
+
+const messages = await pg.outbox.claim("billing.events", "worker-a", {
+  limit: 10,
+  visibilityTimeoutMs: 30_000
+});
+
+for (const message of messages) {
+  await deliver(message.payload);
+  await pg.outbox.ack([message.id]);
+}
+```
+
+真实作业队列、重试和调度优先使用 `pg-boss` 队列适配器。列表 `blpop()` / `brpop()` 只适合简单 worker pull 的迁移桥接。
+
+## Web 适配器
+
+`@postgresx/noredis/adapters/web` 不依赖 Express、Fastify 或 Elysia 运行时，只导出常见 session store 和 read-through cache helper 形状：
+
+```ts
+import {
+  createElysiaSessionStore,
+  createPgredisCacheHelpers
+} from "@postgresx/noredis/adapters/web";
+
+const sessions = createElysiaSessionStore(pg.cache, {
+  prefix: "sess:",
+  ttlMs: 24 * 60 * 60 * 1000
+});
+
+const cache = createPgredisCacheHelpers(pg.cache, {
+  prefix: "http:",
+  ttlMs: 60_000
 });
 ```
 
@@ -612,7 +793,7 @@ npm install @postgresx/noredis pg-boss
 - `work()` 注册工作者。
 - `getBoss()` 返回底层的 `PgBoss` 实例，用于高级场景。
 
-这涵盖了 Redis 支持的后台作业用例，如 Bull 风格的异步 webhook、计费刷新、重试和长任务。它不模拟 Redis Streams 命令。
+这涵盖了 Redis 支持的后台作业用例，如 Bull 风格的异步 webhook、计费刷新、重试和长任务。它不模拟 Redis Streams 命令。事件日志处理使用 `pg.outbox`，队列优先迁移使用 `pg.queue`。
 
 ## 发布准备状态
 

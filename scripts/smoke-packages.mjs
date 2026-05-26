@@ -40,21 +40,28 @@ try {
   await run("npm", ["install", "--ignore-scripts", pgredisTarball, listenerTarball, "pg@^8.16.3"], { cwd: temp });
 
   const nodeSmoke = `
-    import { createPgredis, publishPgNotify } from "@postgresx/noredis";
+    import { createPgredis, createPgOutboxStream, collectPgredisMetrics, publishPgNotify } from "@postgresx/noredis";
     import { createPgAdapter, createPgNodeListener } from "@postgresx/noredis/adapters/node";
+    import { createPgredisSessionStore } from "@postgresx/noredis/adapters/web";
     import { createPgListener } from "@postgresx/bun-listen";
     if (typeof createPgredis !== "function") throw new Error("createPgredis export missing");
+    if (typeof createPgOutboxStream !== "function") throw new Error("createPgOutboxStream export missing");
+    if (typeof collectPgredisMetrics !== "function") throw new Error("collectPgredisMetrics export missing");
     if (typeof createPgAdapter !== "function") throw new Error("createPgAdapter export missing");
     if (typeof createPgNodeListener !== "function") throw new Error("createPgNodeListener export missing");
+    if (typeof createPgredisSessionStore !== "function") throw new Error("createPgredisSessionStore export missing");
     if (typeof publishPgNotify !== "function") throw new Error("publishPgNotify export missing");
     if (typeof createPgListener !== "function") throw new Error("createPgListener export missing");
   `;
   const bunSmoke = `
-    import { createPgredis } from "@postgresx/noredis";
+    import { createPgredis, createPgredisMigrationAliases } from "@postgresx/noredis";
     import { createBunSqlAdapter } from "@postgresx/noredis/adapters/bun";
+    import { createPgredisCacheHelpers } from "@postgresx/noredis/adapters/web";
     import { createPgListener } from "@postgresx/bun-listen";
     if (typeof createPgredis !== "function") throw new Error("createPgredis export missing");
+    if (typeof createPgredisMigrationAliases !== "function") throw new Error("createPgredisMigrationAliases export missing");
     if (typeof createBunSqlAdapter !== "function") throw new Error("createBunSqlAdapter export missing");
+    if (typeof createPgredisCacheHelpers !== "function") throw new Error("createPgredisCacheHelpers export missing");
     if (typeof createPgListener !== "function") throw new Error("createPgListener export missing");
   `;
 

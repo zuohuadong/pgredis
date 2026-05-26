@@ -34,7 +34,42 @@ class MockSql implements BunSqlLike {
           expiresAt: ttlMs === null ? null : this.now + ttlMs
         });
       }
-      return [] as T[];
+      return [{ key: String(params[1]) }] as T[];
+    }
+
+    if (normalized.startsWith("UPDATE")) {
+      const namespace = String(params[0]);
+      const key = String(params[1]);
+      const compoundKey = this.rowKey(namespace, key);
+      const row = this.getLiveRow(namespace, key);
+      if (!row) return [] as T[];
+
+      if (normalized.includes("VALUE = $3::JSONB") || normalized.includes("VALUE = $4::JSONB")) {
+        const valueParam = normalized.includes("VALUE = $3::JSONB") ? 2 : 3;
+        const ttlParam = normalized.includes("VALUE = $3::JSONB") ? 3 : 4;
+        const expectedParam = normalized.includes("VALUE = $4::JSONB") ? 2 : null;
+        if (expectedParam !== null && JSON.stringify(row.value) !== String(params[expectedParam])) return [] as T[];
+        const ttlMs = params[ttlParam] === null ? null : Number(params[ttlParam]);
+        const value = JSON.parse(String(params[valueParam])) as unknown;
+        this.rows.set(compoundKey, {
+          value,
+          expiresAt: ttlMs === null ? null : this.now + ttlMs
+        });
+        return [{ key, value, expires_at: this.toDate(ttlMs === null ? null : this.now + ttlMs) }] as T[];
+      }
+
+      if (normalized.includes("EXPIRES_AT = NOW()")) {
+        const ttlMs = Number(params[2]);
+        row.expiresAt = this.now + ttlMs;
+        return [{ key, value: row.value, expires_at: this.toDate(row.expiresAt) }] as T[];
+      }
+
+      if (normalized.includes("EXPIRES_AT = NULL")) {
+        row.expiresAt = null;
+        return [{ key, value: row.value, expires_at: null }] as T[];
+      }
+
+      return [{ key }] as T[];
     }
 
     if (normalized.startsWith("SELECT VALUE")) {

@@ -15,6 +15,16 @@ export interface PgListScanResult<T = unknown> {
   values: T[];
 }
 
+export interface PgListBlockingPopOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export interface PgListBlockingPopResult<T = unknown> {
+  key: string;
+  value: T;
+}
+
 interface ListRow {
   value: unknown;
 }
@@ -99,6 +109,20 @@ export class PgList {
     return this.pop<T>(key, count, "DESC");
   }
 
+  async blpop<T = unknown>(
+    keys: string | readonly string[],
+    options: PgListBlockingPopOptions = {}
+  ): Promise<PgListBlockingPopResult<T> | null> {
+    return this.blockingPop<T>(keys, "left", options);
+  }
+
+  async brpop<T = unknown>(
+    keys: string | readonly string[],
+    options: PgListBlockingPopOptions = {}
+  ): Promise<PgListBlockingPopResult<T> | null> {
+    return this.blockingPop<T>(keys, "right", options);
+  }
+
   async lrange<T = unknown>(key: string, start = 0, stop = -1): Promise<T[]> {
     const limit = stop < 0 ? null : Math.max(0, stop - start + 1);
     const rows = await this.sql.unsafe<ListRow>(
@@ -178,6 +202,29 @@ export class PgList {
       [this.namespace, key, limit]
     );
     return rows.map((row) => parseValue<T>(row.value));
+  }
+
+  private async blockingPop<T>(
+    keys: string | readonly string[],
+    side: "left" | "right",
+    options: PgListBlockingPopOptions
+  ): Promise<PgListBlockingPopResult<T> | null> {
+    const listKeys = typeof keys === "string" ? [keys] : [...keys];
+    if (listKeys.length === 0) return null;
+    const timeoutMs = options.timeoutMs ?? 0;
+    const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 100));
+    const deadline = timeoutMs <= 0 ? null : this.now() + timeoutMs;
+
+    while (true) {
+      for (const key of listKeys) {
+        const values = side === "left" ? await this.lpop<T>(key, 1) : await this.rpop<T>(key, 1);
+        if (values.length > 0) return { key, value: values[0]! };
+      }
+
+      if (deadline !== null && this.now() >= deadline) return null;
+      const delayMs = deadline === null ? pollIntervalMs : Math.min(pollIntervalMs, Math.max(0, deadline - this.now()));
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 
   async lscan<T = unknown>(key: string, cursor: number | null = null, count = 100): Promise<PgListScanResult<T>> {

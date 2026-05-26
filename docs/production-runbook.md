@@ -60,6 +60,9 @@ Alert when cleanup repeatedly fails or when expired rows grow faster than the
 cleanup limit. Increase `limit` or run cleanup more frequently before table
 bloat becomes visible in query latency.
 
+Export `await pg.metrics()` to observe cleanup totals, table sizes, and TTL
+backlog from the same facade used by application code.
+
 ## Health checks
 
 Use the facade health check for the database path:
@@ -67,6 +70,17 @@ Use the facade health check for the database path:
 ```ts
 await pg.health();
 ```
+
+Use the metrics facade for a production scrape path:
+
+```ts
+const metrics = await pg.metrics();
+```
+
+The metrics payload includes table sizes, live/dead row estimates, TTL backlog
+where a table has `expires_at`, cleanup counters, and queue state when a queue
+adapter is configured. Listener health can also be passed to
+`collectPgredisMetrics()` for custom scrape surfaces.
 
 For listeners, export `getHealth()` into the application's metrics surface:
 
@@ -124,6 +138,28 @@ const queues = await boss?.getQueues();
 
 Use `pg-boss` retry settings for idempotent jobs. Do not use `LISTEN/NOTIFY` as
 the durability layer for billing, webhook delivery, or user-visible workflows.
+
+## Durable outbox and worker pulls
+
+Use `pg.outbox` for event-log style processing that previously used Redis
+Streams. Messages are claimed with `FOR UPDATE SKIP LOCKED`, made invisible for
+the configured visibility timeout, and acknowledged after processing:
+
+```ts
+const messages = await pg.outbox.claim("billing.events", "worker-a", {
+  limit: 25,
+  visibilityTimeoutMs: 30_000
+});
+
+for (const message of messages) {
+  await processMessage(message.payload);
+  await pg.outbox.ack([message.id]);
+}
+```
+
+For worker queues with retries, delays, and scheduling, prefer `pg.queue`
+(`pg-boss`). Use list `blpop()` / `brpop()` only as a polling migration bridge
+for simple pull loops, and keep poll intervals conservative under load.
 
 ## Rollback
 

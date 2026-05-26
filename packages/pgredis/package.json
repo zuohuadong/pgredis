@@ -27,6 +27,11 @@
       "import": "./dist/adapters/node.js",
       "default": "./dist/adapters/node.js"
     },
+    "./adapters/web": {
+      "types": "./dist/adapters/web.d.ts",
+      "import": "./dist/adapters/web.js",
+      "default": "./dist/adapters/web.js"
+    },
     "./kv-cache": {
       "types": "./dist/kv-cache.d.ts",
       "import": "./dist/kv-cache.js",
@@ -34,8 +39,8 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/adapters/bun.ts src/adapters/node.ts src/kv-cache.ts --format esm --dts --clean --out-dir dist --external pg --external pg-boss --external @postgresx/bun-listen",
-    "test": "bun test src/*.test.ts",
+    "build": "tsup src/index.ts src/adapters/bun.ts src/adapters/node.ts src/adapters/web.ts src/kv-cache.ts --format esm --dts --clean --out-dir dist --external pg --external pg-boss --external @postgresx/bun-listen",
+    "test": "bun test src",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

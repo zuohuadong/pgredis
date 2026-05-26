@@ -20,15 +20,28 @@ export interface PgKvCacheOptions {
   notify?: false | PgKvCacheNotifyOptions;
   instanceId?: string;
   now?: () => number;
+  serializer?: PgKvSerializer;
 }
 
 export interface PgKvSetOptions {
   ttlMs?: number | null;
   notify?: boolean;
+  mode?: "always" | "nx" | "xx";
+  nx?: boolean;
+  xx?: boolean;
+}
+
+export interface PgKvCompareAndSwapOptions extends PgKvSetOptions {
+  expectedMissing?: boolean;
 }
 
 export interface PgKvSchemaOptions {
   unlogged?: boolean;
+}
+
+export interface PgKvSerializer {
+  serialize(value: unknown): unknown;
+  deserialize(value: unknown): unknown;
 }
 
 export interface PgKvNotification {
@@ -136,6 +149,7 @@ export class PgKvCache {
   private readonly l1Max: number;
   private readonly l1TtlMs: number;
   private readonly notifyEnabled: boolean;
+  private readonly serializer: PgKvSerializer;
   private readonly l1 = new Map<string, L1Entry>();
 
   constructor(options: PgKvCacheOptions) {
@@ -152,6 +166,10 @@ export class PgKvCache {
 
     this.notifyEnabled = options.notify !== false && options.notify?.enabled !== false;
     this.notifyChannel = options.notify && options.notify.channel ? options.notify.channel : DEFAULT_NOTIFY_CHANNEL;
+    this.serializer = options.serializer ?? {
+      serialize: (value) => value,
+      deserialize: (value) => value
+    };
   }
 
   async ensureSchema(options: PgKvSchemaOptions = {}): Promise<void> {
@@ -196,7 +214,7 @@ export class PgKvCache {
       return null;
     }
 
-    const value = parseValue<T>(row.value);
+    const value = this.deserialize<T>(row.value);
     this.setL1(key, value, rowExpiresAt(row));
     return value;
   }
@@ -228,7 +246,7 @@ export class PgKvCache {
 
     for (const row of rows) {
       if (!row.key) continue;
-      const value = parseValue<T>(row.value);
+      const value = this.deserialize<T>(row.value);
       result.set(row.key, value);
       this.setL1(row.key, value, rowExpiresAt(row));
     }
@@ -240,26 +258,49 @@ export class PgKvCache {
     return result;
   }
 
-  async set<T = unknown>(key: string, value: T, options: PgKvSetOptions = {}): Promise<void> {
+  async set<T = unknown>(key: string, value: T, options: PgKvSetOptions = {}): Promise<boolean> {
     const ttlMs = normalizeTtlMs(options.ttlMs);
-    await this.sql.unsafe(
-      `INSERT INTO ${this.quotedTableName} (namespace, key, value, expires_at, updated_at)
-       VALUES (
-         $1,
-         $2,
-         $3::jsonb,
-         CASE WHEN $4::bigint IS NULL THEN NULL ELSE NOW() + ($4::bigint * INTERVAL '1 millisecond') END,
-         NOW()
-       )
-       ON CONFLICT (namespace, key) DO UPDATE
-       SET value = EXCLUDED.value,
-           expires_at = EXCLUDED.expires_at,
-           updated_at = NOW()`,
-      [this.namespace, key, jsonValue(value), ttlMs]
-    );
+    const mode = this.resolveSetMode(options);
+    const serialized = jsonValue(this.serializer.serialize(value));
+    const rows = mode === "xx"
+      ? await this.sql.unsafe<{ key: string }>(
+          `UPDATE ${this.quotedTableName}
+           SET value = $3::jsonb,
+               expires_at = CASE WHEN $4::bigint IS NULL THEN NULL ELSE NOW() + ($4::bigint * INTERVAL '1 millisecond') END,
+               updated_at = NOW()
+           WHERE namespace = $1
+             AND key = $2
+             AND (expires_at IS NULL OR expires_at > NOW())
+           RETURNING key`,
+          [this.namespace, key, serialized, ttlMs]
+        )
+      : await this.sql.unsafe<{ key: string }>(
+          `INSERT INTO ${this.quotedTableName} (namespace, key, value, expires_at, updated_at)
+           VALUES (
+             $1,
+             $2,
+             $3::jsonb,
+             CASE WHEN $4::bigint IS NULL THEN NULL ELSE NOW() + ($4::bigint * INTERVAL '1 millisecond') END,
+             NOW()
+           )
+           ON CONFLICT (namespace, key) DO UPDATE
+           SET value = EXCLUDED.value,
+               expires_at = EXCLUDED.expires_at,
+               updated_at = NOW()
+           ${mode === "nx" ? `WHERE ${this.quotedTableName}.expires_at IS NOT NULL AND ${this.quotedTableName}.expires_at <= NOW()` : ""}
+           RETURNING key`,
+          [this.namespace, key, serialized, ttlMs]
+        );
+
+    const written = rows.length > 0;
+    if (!written) {
+      if (mode === "xx") this.deleteL1(key);
+      return false;
+    }
 
     this.setL1(key, value, ttlMs === null ? null : this.now() + ttlMs);
     if (options.notify !== false) await this.publish({ op: "set", key });
+    return true;
   }
 
   async mset<T = unknown>(entries: Iterable<readonly [string, T]>, options: PgKvSetOptions = {}): Promise<void> {
@@ -270,7 +311,7 @@ export class PgKvCache {
     const params: unknown[] = [];
     const groups = values.map(([key, value], index) => {
       const base = index * 4;
-      params.push(this.namespace, key, jsonValue(value), ttlMs);
+      params.push(this.namespace, key, jsonValue(this.serializer.serialize(value)), ttlMs);
       return `($${base + 1}, $${base + 2}, $${base + 3}::jsonb, CASE WHEN $${base + 4}::bigint IS NULL THEN NULL ELSE NOW() + ($${base + 4}::bigint * INTERVAL '1 millisecond') END, NOW())`;
     }).join(", ");
 
@@ -346,6 +387,131 @@ export class PgKvCache {
     return rows.length;
   }
 
+  async compareAndSwap<T = unknown>(
+    key: string,
+    expected: T | null,
+    next: T,
+    options: PgKvCompareAndSwapOptions = {}
+  ): Promise<boolean> {
+    const ttlMs = normalizeTtlMs(options.ttlMs);
+    const nextValue = jsonValue(this.serializer.serialize(next));
+    const expectedValue = expected === null ? null : jsonValue(this.serializer.serialize(expected));
+    const expectedMissing = options.expectedMissing ?? expected === null;
+
+    const rows = expectedMissing
+      ? await this.sql.unsafe<{ key: string }>(
+          `INSERT INTO ${this.quotedTableName} (namespace, key, value, expires_at, updated_at)
+           VALUES (
+             $1,
+             $2,
+             $3::jsonb,
+             CASE WHEN $4::bigint IS NULL THEN NULL ELSE NOW() + ($4::bigint * INTERVAL '1 millisecond') END,
+             NOW()
+           )
+           ON CONFLICT (namespace, key) DO UPDATE
+           SET value = EXCLUDED.value,
+               expires_at = EXCLUDED.expires_at,
+               updated_at = NOW()
+           WHERE ${this.quotedTableName}.expires_at IS NOT NULL AND ${this.quotedTableName}.expires_at <= NOW()
+           RETURNING key`,
+          [this.namespace, key, nextValue, ttlMs]
+        )
+      : await this.sql.unsafe<{ key: string }>(
+          `UPDATE ${this.quotedTableName}
+           SET value = $4::jsonb,
+               expires_at = CASE WHEN $5::bigint IS NULL THEN NULL ELSE NOW() + ($5::bigint * INTERVAL '1 millisecond') END,
+               updated_at = NOW()
+           WHERE namespace = $1
+             AND key = $2
+             AND value = $3::jsonb
+             AND (expires_at IS NULL OR expires_at > NOW())
+           RETURNING key`,
+          [this.namespace, key, expectedValue, nextValue, ttlMs]
+        );
+
+    const written = rows.length > 0;
+    if (!written) {
+      this.deleteL1(key);
+      return false;
+    }
+
+    this.setL1(key, next, ttlMs === null ? null : this.now() + ttlMs);
+    if (options.notify !== false) await this.publish({ op: "set", key });
+    return true;
+  }
+
+  async expire(key: string, ttlMs: number, options: { notify?: boolean } = {}): Promise<boolean> {
+    const normalizedTtlMs = normalizeTtlMs(ttlMs) ?? 0;
+    const rows = await this.sql.unsafe<{ key: string; value: unknown; expires_at: Date | string | null }>(
+      `UPDATE ${this.quotedTableName}
+       SET expires_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
+           updated_at = NOW()
+       WHERE namespace = $1
+         AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())
+       RETURNING key, value, expires_at`,
+      [this.namespace, key, normalizedTtlMs]
+    );
+    const row = rows[0];
+    if (!row) {
+      this.deleteL1(key);
+      return false;
+    }
+    this.setL1(key, this.deserialize(row.value), rowExpiresAt(row));
+    if (options.notify !== false) await this.publish({ op: "set", key });
+    return true;
+  }
+
+  async persist(key: string, options: { notify?: boolean } = {}): Promise<boolean> {
+    const rows = await this.sql.unsafe<{ key: string; value: unknown; expires_at: Date | string | null }>(
+      `UPDATE ${this.quotedTableName}
+       SET expires_at = NULL,
+           updated_at = NOW()
+       WHERE namespace = $1
+         AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())
+       RETURNING key, value, expires_at`,
+      [this.namespace, key]
+    );
+    const row = rows[0];
+    if (!row) {
+      this.deleteL1(key);
+      return false;
+    }
+    this.setL1(key, this.deserialize(row.value), null);
+    if (options.notify !== false) await this.publish({ op: "set", key });
+    return true;
+  }
+
+  async touch(key: string): Promise<boolean> {
+    const rows = await this.sql.unsafe<{ key: string }>(
+      `UPDATE ${this.quotedTableName}
+       SET updated_at = NOW()
+       WHERE namespace = $1
+         AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())
+       RETURNING key`,
+      [this.namespace, key]
+    );
+    return rows.length > 0;
+  }
+
+  async ttl(key: string): Promise<number | null> {
+    const rows = await this.sql.unsafe<{ ttl_ms: number | string | null }>(
+      `SELECT CASE
+         WHEN expires_at IS NULL THEN NULL
+         ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (expires_at - NOW())) * 1000))::bigint
+       END AS ttl_ms
+       FROM ${this.quotedTableName}
+       WHERE namespace = $1
+         AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())
+       LIMIT 1`,
+      [this.namespace, key]
+    );
+    return rows[0]?.ttl_ms === null || rows[0]?.ttl_ms === undefined ? null : Number(rows[0].ttl_ms);
+  }
+
   invalidate(key: string): void {
     this.deleteL1(key);
   }
@@ -390,6 +556,17 @@ export class PgKvCache {
       ...event
     };
     await this.sql.unsafe("SELECT pg_notify($1, $2)", [this.notifyChannel, JSON.stringify(payload)]);
+  }
+
+  private deserialize<T>(value: unknown): T {
+    return this.serializer.deserialize(parseValue(value)) as T;
+  }
+
+  private resolveSetMode(options: PgKvSetOptions): "always" | "nx" | "xx" {
+    if (options.nx && options.xx) throw new Error("PgKvCache.set cannot use both nx and xx");
+    if (options.nx) return "nx";
+    if (options.xx) return "xx";
+    return options.mode ?? "always";
   }
 
   private parseNotification(payload: string): PgKvNotification | null {
