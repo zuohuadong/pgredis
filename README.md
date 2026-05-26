@@ -147,8 +147,9 @@ bun run check
 
 ## Benchmark
 
-Benchmarks compare the same operation groups against Redis and PostgreSQL on
-the same GitHub Actions runner. Run locally with:
+Benchmarks compare the same operation groups across Node.js + Redis,
+Node.js + PostgreSQL, and Bun.js + PostgreSQL on the same GitHub Actions
+runner. Run locally with:
 
 ```bash
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/pgredis \
@@ -156,10 +157,17 @@ REDIS_URL=redis://127.0.0.1:6379 \
 bun run benchmark
 ```
 
-The benchmark writes results to `benchmark.md`. The GitHub Actions benchmark
-workflow is manual and also uploads the generated document as an artifact.
+The benchmark writes results to `benchmark.md` and updates the summary below.
+The GitHub Actions benchmark workflow is manual and also uploads the generated
+document as an artifact.
 `ioredis` is installed only in this repository as a benchmark/dev dependency;
 it is not a runtime dependency of the published `@postgresx/noredis` package.
+
+<!-- BENCHMARK:START -->
+No current three-backend benchmark has been generated yet. Run the manual
+GitHub Actions benchmark workflow to update this section and
+[benchmark.md](./benchmark.md).
+<!-- BENCHMARK:END -->
 
 ## Launch readiness
 
@@ -366,7 +374,8 @@ bun run check
 
 ## 基准测试
 
-基准测试在同一 GitHub Actions runner 上比较 Redis 和 PostgreSQL 的相同操作组。本地运行：
+基准测试在同一 GitHub Actions runner 上比较 Node.js + Redis、
+Node.js + PostgreSQL 和 Bun.js + PostgreSQL 的相同操作组。本地运行：
 
 ```bash
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/pgredis \
@@ -374,9 +383,10 @@ REDIS_URL=redis://127.0.0.1:6379 \
 bun run benchmark
 ```
 
-基准测试结果写入 `benchmark.md`。GitHub Actions 基准测试工作流是手动触发的，
-并将生成的文档作为 artifact 上传。`ioredis` 仅作为基准测试/开发依赖安装在此仓库中；
-它不是已发布的 `@postgresx/noredis` 包的运行时依赖。
+基准测试结果写入 `benchmark.md`，并自动更新英文 Benchmark 部分中的摘要。
+GitHub Actions 基准测试工作流是手动触发的，并将生成的文档作为 artifact 上传。
+`ioredis` 仅作为基准测试/开发依赖安装在此仓库中；它不是已发布的
+`@postgresx/noredis` 包的运行时依赖。
 
 ## 发布准备状态
 

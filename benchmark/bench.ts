@@ -1,24 +1,23 @@
-import Redis from "ioredis";
-import { createPgredis } from "../packages/pgredis/src/index";
-import { createPgAdapter } from "../packages/pgredis/src/adapters/node";
-import { quoteIdentifier } from "../packages/pgredis/src/sql";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 interface BenchResult {
   operation: string;
-  backend: "Redis" | "PostgreSQL";
+  backend: "Node.js + Redis" | "Node.js + PostgreSQL" | "Bun.js + PostgreSQL";
   iterations: number;
   concurrency: number;
   durationMs: number;
   opsPerSecond: number;
 }
 
+const exec = promisify(execFile);
+const root = new URL("..", import.meta.url);
 const iterations = readPositiveInteger("BENCHMARK_ITERATIONS", 2000);
 const concurrency = readPositiveInteger("BENCHMARK_CONCURRENCY", 16);
-const databaseUrl = process.env.DATABASE_URL || "postgres://postgres:postgres@127.0.0.1:5432/pgredis";
-const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const runId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-const redisPrefix = `pgredis:bench:${runId}`;
-const tablePrefix = `pgredis_bench_${runId.replace(/[^a-z0-9_]/gi, "_").toLowerCase()}`;
 
 function readPositiveInteger(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -28,33 +27,14 @@ function readPositiveInteger(name: string, fallback: number): number {
   return Math.floor(parsed);
 }
 
-async function runCase(
-  operation: string,
-  backend: BenchResult["backend"],
-  fn: (index: number) => Promise<unknown>
-): Promise<BenchResult> {
-  let next = 0;
-  const start = performance.now();
-
-  await Promise.all(
-    Array.from({ length: concurrency }, async () => {
-      while (true) {
-        const index = next++;
-        if (index >= iterations) return;
-        await fn(index);
-      }
-    })
-  );
-
-  const durationMs = performance.now() - start;
-  return {
-    operation,
-    backend,
-    iterations,
-    concurrency,
-    durationMs,
-    opsPerSecond: iterations / (durationMs / 1000)
-  };
+async function run(command: string, args: string[], env: Record<string, string>): Promise<void> {
+  const { stdout, stderr } = await exec(command, args, {
+    cwd: root,
+    env: { ...process.env, ...env },
+    maxBuffer: 10 * 1024 * 1024
+  });
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
 }
 
 function formatNumber(value: number): string {
@@ -79,7 +59,8 @@ function markdown(results: BenchResult[]): string {
     "",
     "- Redis and PostgreSQL run on the same GitHub Actions runner in the benchmark workflow.",
     "- The workflow constrains both service containers to `--cpus 1 --memory 512m`.",
-    "- Results measure application-level calls through `ioredis`, `pg`, and `pgredis` adapters.",
+    "- Node.js tests run with `node`; Bun.js tests run with `bun`.",
+    "- PostgreSQL tests use `@postgresx/noredis` with the local L1 cache disabled so reads hit PostgreSQL.",
     "",
     "| Operation | Backend | Iterations | Concurrency | Duration ms | Ops/sec |",
     "| --- | --- | ---: | ---: | ---: | ---: |",
@@ -93,79 +74,74 @@ function markdown(results: BenchResult[]): string {
   ].join("\n") + "\n";
 }
 
-async function cleanupRedis(redis: Redis): Promise<void> {
-  let cursor = "0";
-  do {
-    const [nextCursor, keys] = await redis.scan(cursor, "MATCH", `${redisPrefix}:*`, "COUNT", 1000);
-    cursor = nextCursor;
-    if (keys.length > 0) await redis.del(...keys);
-  } while (cursor !== "0");
+function readResults(raw: string): BenchResult[] {
+  const parsed = JSON.parse(raw) as BenchResult[];
+  if (!Array.isArray(parsed)) throw new Error("Benchmark child did not produce an array");
+  return parsed;
 }
 
-async function dropBenchmarkTables(sql: ReturnType<typeof createPgAdapter>): Promise<void> {
-  const names = ["kv", "counter", "hash", "set", "list", "sorted_set", "rate_limit"].map((name) => `${tablePrefix}_${name}`);
-  for (const name of names) {
-    await sql.unsafe(`DROP TABLE IF EXISTS ${quoteIdentifier(name)} CASCADE`);
-  }
-  await sql.close();
-}
-
-async function main(): Promise<void> {
-  const redis = new Redis(redisUrl, {
-    lazyConnect: true,
-    maxRetriesPerRequest: 1
+function readmeSummary(results: BenchResult[]): string {
+  const operations = [...new Set(results.map((result) => result.operation))];
+  const backends: BenchResult["backend"][] = ["Node.js + Redis", "Node.js + PostgreSQL", "Bun.js + PostgreSQL"];
+  const rows = operations.map((operation) => {
+    const cells = backends.map((backend) => {
+      const result = results.find((item) => item.operation === operation && item.backend === backend);
+      return result ? `${formatNumber(result.opsPerSecond)} ops/sec` : "-";
+    });
+    return `| ${operation} | ${cells.join(" |")} |`;
   });
-  const sql = createPgAdapter(databaseUrl);
-  const pg = createPgredis({ sql, namespace: runId, tablePrefix });
-  const results: BenchResult[] = [];
 
-  await redis.connect();
-
-  try {
-    await pg.ensureSchema();
-
-    results.push(await runCase("KV write", "Redis", (index) =>
-      redis.set(`${redisPrefix}:kv:${index}`, JSON.stringify({ index }))
-    ));
-    results.push(await runCase("KV write", "PostgreSQL", (index) =>
-      pg.cache.set(`kv:${index}`, { index }, { notify: false })
-    ));
-
-    results.push(await runCase("KV read", "Redis", async (index) => {
-      await redis.get(`${redisPrefix}:kv:${index}`);
-    }));
-    results.push(await runCase("KV read", "PostgreSQL", async (index) => {
-      await pg.cache.get(`kv:${index}`);
-    }));
-
-    results.push(await runCase("Counter increment", "Redis", (index) =>
-      redis.incrby(`${redisPrefix}:counter`, index % 3 === 0 ? 2 : 1)
-    ));
-    results.push(await runCase("Counter increment", "PostgreSQL", (index) =>
-      pg.counter.incr("counter", index % 3 === 0 ? 2 : 1)
-    ));
-
-    results.push(await runCase("Set add", "Redis", (index) =>
-      redis.sadd(`${redisPrefix}:set`, `member:${index}`)
-    ));
-    results.push(await runCase("Set add", "PostgreSQL", (index) =>
-      pg.set.sadd("set", `member:${index}`)
-    ));
-
-    results.push(await runCase("Pub/Sub publish", "Redis", (index) =>
-      redis.publish(`${redisPrefix}:events`, JSON.stringify({ index }))
-    ));
-    results.push(await runCase("Pub/Sub publish", "PostgreSQL", (index) =>
-      pg.pubsub.publish(`${tablePrefix}_events`, { index })
-    ));
-
-    await Bun.write(new URL("../benchmark.md", import.meta.url), markdown(results));
-    console.log(markdown(results));
-  } finally {
-    await cleanupRedis(redis).catch(() => undefined);
-    redis.disconnect();
-    await dropBenchmarkTables(sql).catch(() => undefined);
-  }
+  return [
+    "<!-- BENCHMARK:START -->",
+    "Latest benchmark summary, generated by the manual GitHub Actions benchmark workflow. See [benchmark.md](./benchmark.md) for full timings and notes.",
+    "",
+    "| Operation | Node.js + Redis | Node.js + PostgreSQL | Bun.js + PostgreSQL |",
+    "| --- | ---: | ---: | ---: |",
+    ...rows,
+    "<!-- BENCHMARK:END -->"
+  ].join("\n");
 }
 
-await main();
+async function updateReadme(results: BenchResult[]): Promise<void> {
+  const readmeUrl = new URL("../README.md", import.meta.url);
+  const start = "<!-- BENCHMARK:START -->";
+  const end = "<!-- BENCHMARK:END -->";
+  const current = await readFile(readmeUrl, "utf8");
+  const nextBlock = readmeSummary(results);
+
+  if (!current.includes(start) || !current.includes(end)) {
+    throw new Error("README.md is missing benchmark summary markers");
+  }
+
+  const before = current.slice(0, current.indexOf(start));
+  const after = current.slice(current.indexOf(end) + end.length);
+  await writeFile(readmeUrl, `${before}${nextBlock}${after}`);
+}
+
+const temp = await mkdtemp(join(tmpdir(), "pgredis-benchmark-"));
+
+try {
+  const nodeOut = join(temp, "node.json");
+  const bunOut = join(temp, "bun.json");
+  const childEnv = {
+    BENCHMARK_ITERATIONS: String(iterations),
+    BENCHMARK_CONCURRENCY: String(concurrency),
+    BENCHMARK_RUN_ID: runId,
+    DATABASE_URL: process.env.DATABASE_URL || "postgres://postgres:postgres@127.0.0.1:5432/pgredis",
+    REDIS_URL: process.env.REDIS_URL || "redis://127.0.0.1:6379"
+  };
+
+  await run("node", ["benchmark/node.mjs"], { ...childEnv, BENCHMARK_OUTPUT: nodeOut });
+  await run("bun", ["benchmark/bun-postgres.mjs"], { ...childEnv, BENCHMARK_OUTPUT: bunOut });
+
+  const results = [
+    ...readResults(await readFile(nodeOut, "utf8")),
+    ...readResults(await readFile(bunOut, "utf8"))
+  ];
+  const output = markdown(results);
+  await writeFile(new URL("../benchmark.md", import.meta.url), output);
+  await updateReadme(results);
+  console.log(output);
+} finally {
+  await rm(temp, { recursive: true, force: true });
+}
