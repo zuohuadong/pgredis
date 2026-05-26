@@ -151,18 +151,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           tmpdir="$(mktemp -d)"
+          workdir="$(mktemp -d)"
+          cleanup() {
+            git worktree remove --force "$workdir" >/dev/null 2>&1 || true
+            rm -rf "$tmpdir" "$workdir"
+          }
+          trap cleanup EXIT
           cp benchmark.md README.md "$tmpdir/"
-          git pull --rebase origin main
+          git fetch origin main
+          git worktree add --detach "$workdir" origin/main
+          cd "$workdir"
           cp "$tmpdir/benchmark.md" "$tmpdir/README.md" .
-          rm -rf "$tmpdir"
           git add benchmark.md README.md
           if git diff --cached --quiet; then
             echo "No benchmark changes"
           else
             git commit -m "docs: update benchmark results"
-            git push || {
+            git push origin HEAD:main || {
               git fetch origin main
               git rebase origin/main
-              git push
+              git push origin HEAD:main
             }
           fi
