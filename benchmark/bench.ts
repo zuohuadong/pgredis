@@ -74,20 +74,16 @@ function comparisonRows(results: BenchResult[]): ComparisonRow[] {
   });
 }
 
-function remoteSummaryRows(rows: ComparisonRow[]): string[] {
+function l1SummaryRows(rows: ComparisonRow[]): string[] {
   return rows.map((row) =>
-    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} |`
+    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
   );
 }
 
-function hotReadL1Row(rows: ComparisonRow[]): ComparisonRow | null {
-  return rows.find((row) => row.operation === "KV read (hot cache)" && (row.nodePostgresL1 || row.bunPostgresL1)) ?? null;
-}
-
-function l1Note(row: ComparisonRow | null, compact = false): string {
-  if (!row) return "No L1 hot-read row was generated.";
-  const prefix = compact ? "L1 hot-read note:" : "For the hot-read cache case with pgredis L1 enabled:";
-  return `${prefix} Node/Postgres L1 reached ${formatOps(row.nodePostgresL1)} ops/sec (${formatRatio(row.nodePostgresL1, row.nodeRedis)} vs Redis), and Bun/Postgres L1 reached ${formatOps(row.bunPostgresL1)} ops/sec (${formatRatio(row.bunPostgresL1, row.nodeRedis)} vs Redis).`;
+function compactSummaryRows(rows: ComparisonRow[]): string[] {
+  return rows.map((row) =>
+    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
+  );
 }
 
 function markdown(results: BenchResult[]): string {
@@ -96,7 +92,6 @@ function markdown(results: BenchResult[]): string {
   const details = results.map((result) =>
     `| ${result.operation} | ${result.backend} | ${result.iterations} | ${result.concurrency} | ${formatNumber(result.durationMs)} | ${formatNumber(result.opsPerSecond)} |`
   );
-  const hotL1 = hotReadL1Row(rows);
 
   return [
     "# Benchmark",
@@ -112,21 +107,17 @@ function markdown(results: BenchResult[]): string {
     "- The benchmark workflow runs PostgreSQL 18 with asynchronous I/O enabled via `io_method=worker`.",
     "- The workflow gives both service containers `--cpus 2 --memory 2g`.",
     "- Node.js tests run with `node`; Bun.js tests run with `bun`.",
-    "- Main comparison rows use `@postgresx/noredis` with local L1 disabled, so reads hit PostgreSQL. This compares Redis as a service with PostgreSQL as a service.",
-    "- L1 is enabled only for the hot-read note and details rows, because it measures an in-process application cache rather than the PostgreSQL service itself.",
+    "- PostgreSQL columns without `(L1)` use `@postgresx/noredis` with local L1 disabled, so reads hit PostgreSQL. These compare Redis as a service with PostgreSQL as a service.",
+    "- PostgreSQL `(L1)` columns enable pgredis in-process memory caching for the hot-read case. That is a valid application-cache mode for Redis replacement, but it measures local process memory plus PostgreSQL backing storage.",
     "- PostgreSQL tables created by pgredis are `UNLOGGED` by default for cache-like workloads, and the workflow sets `synchronous_commit=off` for the benchmark database. Both choices trade crash-time recency guarantees for cache throughput.",
     "",
     "## Summary",
     "",
-    "Ops/sec is higher-is-better. The main table keeps pgredis L1 disabled to avoid mixing service-level backend performance with in-process cache hits.",
+    "Ops/sec is higher-is-better. Non-L1 PostgreSQL columns show the service-level backend path; `(L1)` columns show the application hot-read path.",
     "",
-    "| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL ops/sec | Node/Postgres vs Redis | Bun.js + PostgreSQL ops/sec | Bun/Postgres vs Redis |",
-    "| --- | ---: | ---: | ---: | ---: | ---: |",
-    ...remoteSummaryRows(rows),
-    "",
-    "## L1 Hot-Read Note",
-    "",
-    l1Note(hotL1),
+    "| Operation | Redis | Node PG | Node PG/Redis | Node PG L1 | Node PG L1/Redis | Bun PG | Bun PG/Redis | Bun PG L1 | Bun PG L1/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...l1SummaryRows(rows),
     "",
     "## Details",
     "",
@@ -138,7 +129,7 @@ function markdown(results: BenchResult[]): string {
     "",
     "- Redis tests use key prefixes and do not flush the whole database.",
     "- PostgreSQL tests create temporary benchmark tables and drop them at the end.",
-    "- PostgreSQL `(L1)` detail rows are informational only and are intentionally excluded from the main comparison table.",
+    "- Empty `(L1)` cells mean that operation does not use pgredis L1 in the benchmark; L1 is only meaningful for hot cache reads.",
     "- Numbers are intended for regression tracking, not universal database sizing.",
     "",
     "References behind benchmark design:",
@@ -158,17 +149,13 @@ function readResults(raw: string): BenchResult[] {
 
 function readmeSummary(results: BenchResult[]): string {
   const rows = comparisonRows(results);
-  const hotL1 = hotReadL1Row(rows);
-
   return [
     "<!-- BENCHMARK:START -->",
-    "Latest benchmark summary, generated by the GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. Main PostgreSQL rows keep pgredis L1 disabled so reads hit PostgreSQL. See [benchmark.md](./benchmark.md) for full timings and notes.",
+    "Latest benchmark summary, generated by the GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. Non-L1 PostgreSQL columns show the service-level path; `(L1)` columns show the application hot-read path. See [benchmark.md](./benchmark.md) for full timings and notes.",
     "",
-    "| Operation | Redis ops/sec | Node/Postgres ops/sec | Node/Postgres vs Redis | Bun/Postgres ops/sec | Bun/Postgres vs Redis |",
-    "| --- | ---: | ---: | ---: | ---: | ---: |",
-    ...remoteSummaryRows(rows),
-    "",
-    l1Note(hotL1, true),
+    "| Operation | Redis | Node PG | Node PG/Redis | Node PG L1 | Node PG L1/Redis | Bun PG | Bun PG/Redis | Bun PG L1 | Bun PG L1/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...compactSummaryRows(rows),
     "<!-- BENCHMARK:END -->"
   ].join("\n");
 }

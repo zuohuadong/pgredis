@@ -11,28 +11,24 @@ Services:
 - The benchmark workflow runs PostgreSQL 18 with asynchronous I/O enabled via `io_method=worker`.
 - The workflow gives both service containers `--cpus 2 --memory 2g`.
 - Node.js tests run with `node`; Bun.js tests run with `bun`.
-- Main comparison rows use `@postgresx/noredis` with local L1 disabled, so reads hit PostgreSQL. This compares Redis as a service with PostgreSQL as a service.
-- L1 is enabled only for the hot-read note and details rows, because it measures an in-process application cache rather than the PostgreSQL service itself.
+- PostgreSQL columns without `(L1)` use `@postgresx/noredis` with local L1 disabled, so reads hit PostgreSQL. These compare Redis as a service with PostgreSQL as a service.
+- PostgreSQL `(L1)` columns enable pgredis in-process memory caching for the hot-read case. That is a valid application-cache mode for Redis replacement, but it measures local process memory plus PostgreSQL backing storage.
 - PostgreSQL tables created by pgredis are `UNLOGGED` by default for cache-like workloads, and the workflow sets `synchronous_commit=off` for the benchmark database. Both choices trade crash-time recency guarantees for cache throughput.
 
 ## Summary
 
-Ops/sec is higher-is-better. The main table keeps pgredis L1 disabled to avoid mixing service-level backend performance with in-process cache hits.
+Ops/sec is higher-is-better. Non-L1 PostgreSQL columns show the service-level backend path; `(L1)` columns show the application hot-read path.
 
-| Operation | Node.js + Redis ops/sec | Node.js + PostgreSQL ops/sec | Node/Postgres vs Redis | Bun.js + PostgreSQL ops/sec | Bun/Postgres vs Redis |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| KV write | 34,169.03 | 6,738.85 | 0.2x | 15,836.2 | 0.46x |
-| KV write (batch) | 195,351.13 | 44,331.98 | 0.23x | 64,644.69 | 0.33x |
-| KV read | 40,023.92 | 9,330.81 | 0.23x | 22,784.09 | 0.57x |
-| KV read (batch) | 281,576.6 | 96,363.16 | 0.34x | 161,585.79 | 0.57x |
-| KV read (hot cache) | 40,851.48 | 9,895.56 | 0.24x | 27,501.96 | 0.67x |
-| Counter increment | 46,903.03 | 9,732.1 | 0.21x | 15,159.77 | 0.32x |
-| Set add | 47,387.95 | 4,506.86 | 0.1x | 7,102.06 | 0.15x |
-| Pub/Sub publish | 38,994.5 | 13,383.9 | 0.34x | 18,160.5 | 0.47x |
-
-## L1 Hot-Read Note
-
-For the hot-read cache case with pgredis L1 enabled: Node/Postgres L1 reached 1,579,425.77 ops/sec (38.66x vs Redis), and Bun/Postgres L1 reached 645,895.74 ops/sec (15.81x vs Redis).
+| Operation | Redis | Node PG | Node PG/Redis | Node PG L1 | Node PG L1/Redis | Bun PG | Bun PG/Redis | Bun PG L1 | Bun PG L1/Redis |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| KV write | 34,169.03 | 6,738.85 | 0.2x | - | - | 15,836.2 | 0.46x | - | - |
+| KV write (batch) | 195,351.13 | 44,331.98 | 0.23x | - | - | 64,644.69 | 0.33x | - | - |
+| KV read | 40,023.92 | 9,330.81 | 0.23x | - | - | 22,784.09 | 0.57x | - | - |
+| KV read (batch) | 281,576.6 | 96,363.16 | 0.34x | - | - | 161,585.79 | 0.57x | - | - |
+| KV read (hot cache) | 40,851.48 | 9,895.56 | 0.24x | 1,579,425.77 | 38.66x | 27,501.96 | 0.67x | 645,895.74 | 15.81x |
+| Counter increment | 46,903.03 | 9,732.1 | 0.21x | - | - | 15,159.77 | 0.32x | - | - |
+| Set add | 47,387.95 | 4,506.86 | 0.1x | - | - | 7,102.06 | 0.15x | - | - |
+| Pub/Sub publish | 38,994.5 | 13,383.9 | 0.34x | - | - | 18,160.5 | 0.47x | - | - |
 
 ## Details
 
@@ -69,7 +65,7 @@ Notes:
 
 - Redis tests use key prefixes and do not flush the whole database.
 - PostgreSQL tests create temporary benchmark tables and drop them at the end.
-- PostgreSQL `(L1)` detail rows are informational only and are intentionally excluded from the main comparison table.
+- Empty `(L1)` cells mean that operation does not use pgredis L1 in the benchmark; L1 is only meaningful for hot cache reads.
 - Numbers are intended for regression tracking, not universal database sizing.
 
 References behind benchmark design:
