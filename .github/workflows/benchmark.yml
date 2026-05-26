@@ -90,10 +90,17 @@ jobs:
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git stash push --include-untracked -- benchmark.md README.md || true
+          git pull --rebase origin main
+          git stash pop || true
           git add benchmark.md README.md
           if git diff --cached --quiet; then
-            echo "No benchmark.md changes"
+            echo "No benchmark changes"
           else
             git commit -m "docs: update benchmark results"
-            git push
+            git push || {
+              git fetch origin main
+              git rebase origin/main
+              git push
+            }
           fi
