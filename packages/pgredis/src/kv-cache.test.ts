@@ -24,6 +24,13 @@ class MockSql implements BunSqlLike {
     }
 
     if (normalized.startsWith("INSERT INTO")) {
+      // NX mode: ON CONFLICT ... WHERE expired - skip if row exists and is not expired
+      if (normalized.includes("EXPIRES_AT IS NOT NULL") && normalized.includes("EXPIRES_AT <=")) {
+        const namespace = String(params[0]);
+        const key = String(params[1]);
+        const existing = this.getLiveRow(namespace, key);
+        if (existing) return [] as T[];
+      }
       for (let index = 0; index < params.length; index += 4) {
         const namespace = String(params[index]);
         const key = String(params[index + 1]);
@@ -139,6 +146,16 @@ class MockSql implements BunSqlLike {
           this.rows.delete(compoundKey);
           deleted.push({ key: key! });
         }
+      }
+      return deleted as T[];
+    }
+
+    if (normalized.startsWith("DELETE FROM") && normalized.includes("KEY IN")) {
+      const namespace = String(params[0]);
+      const keys = params.slice(1).map(String);
+      const deleted: Array<{ key: string }> = [];
+      for (const key of keys) {
+        if (this.rows.delete(this.rowKey(namespace, key))) deleted.push({ key });
       }
       return deleted as T[];
     }
@@ -328,3 +345,128 @@ describe("PgKvCache", () => {
     expect(cache.stats().l1Size).toBe(1);
   });
 });
+
+  test("NX: set only when key is missing", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "nx" });
+
+    await cache.set("existing", { v: 1 }, { ttlMs: 60_000 });
+    // NX on existing key should not overwrite
+    const written = await cache.set("existing", { v: 2 }, { nx: true });
+    expect(written).toBe(false);
+    const val = await cache.get("existing");
+    expect(val).toEqual({ v: 1 });
+  });
+
+  test("XX: set only when key exists", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "xx" });
+
+    // XX on missing key
+    const miss = await cache.set("missing", { v: 1 }, { xx: true });
+    expect(miss).toBe(false);
+
+    await cache.set("present", { v: 1 }, { ttlMs: 60_000 });
+    const hit = await cache.set("present", { v: 2 }, { xx: true });
+    expect(hit).toBe(true);
+  });
+
+  test("NX and XX together throws", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "both" });
+    await expect(cache.set("k", { v: 1 }, { nx: true, xx: true })).rejects.toThrow("nx and xx");
+  });
+
+  test("compareAndSwap replaces only when expected matches", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "cas" });
+
+    await cache.set("counter", 1, { ttlMs: 60_000 });
+    // CAS with wrong expected value
+    const miss = await cache.compareAndSwap("counter", 999, 2);
+    expect(miss).toBe(false);
+
+    // CAS with correct expected value
+    const hit = await cache.compareAndSwap("counter", 1, 2);
+    expect(hit).toBe(true);
+    const val = await cache.get("counter");
+    expect(val).toBe(2);
+  });
+
+  test("compareAndSwap handles missing key with expectedMissing", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "cas-miss" });
+
+    const hit = await cache.compareAndSwap("new-key", null, { v: 1 }, { expectedMissing: true });
+    expect(hit).toBe(true);
+  });
+
+  test("touch returns true for existing key, false for missing", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "touch" });
+
+    expect(await cache.touch("missing")).toBe(false);
+    await cache.set("present", { v: 1 }, { ttlMs: 60_000 });
+    expect(await cache.touch("present")).toBe(true);
+  });
+
+  test("expire updates TTL on existing key", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "ttl" });
+
+    await cache.set("k", { v: 1 }, { ttlMs: 60_000 });
+    const result = await cache.expire("k", 120_000);
+    expect(result).toBe(true);
+    const miss = await cache.expire("missing", 120_000);
+    expect(miss).toBe(false);
+  });
+
+  test("persist removes TTL", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "persist" });
+
+    await cache.set("k", { v: 1 }, { ttlMs: 60_000 });
+    const result = await cache.persist("k");
+    expect(result).toBe(true);
+  });
+
+  test("unlink removes multiple keys", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "unlink" });
+
+    await cache.mset([["a", 1], ["b", 2], ["c", 3]]);
+    const count = await cache.unlink("a", "b");
+    expect(count).toBe(2);
+  });
+
+  test("setex/psetex/setnx/getset/getdel work", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "shortcuts" });
+
+    expect(await cache.setex("k1", 60, "v1")).toBe("OK");
+    expect(await cache.psetex("k2", 60000, "v2")).toBe("OK");
+    expect(await cache.setnx("k3", "v3")).toBe(1);
+    const old = await cache.getset("k1", "new");
+    expect(old).toBe("v1");
+    const deleted = await cache.getdel("k1");
+    expect(deleted).toBe("new");
+  });
+
+  test("delete returns boolean", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "del" });
+
+    await cache.set("k", { v: 1 }, { ttlMs: 60_000 });
+    expect(await cache.delete("k")).toBe(true);
+    expect(await cache.delete("k")).toBe(false);
+  });
+
+  test("cleanupExpired removes expired rows", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "cleanup", l1: false, now: () => sql.now });
+
+    await cache.set("short-lived", { v: 1 }, { ttlMs: 5 });
+    sql.now += 10;
+    const deleted = await cache.cleanupExpired();
+    expect(deleted).toBe(1);
+  });
