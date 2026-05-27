@@ -23,7 +23,10 @@ const redis = new Redis(redisUrl, {
   lazyConnect: true,
   maxRetriesPerRequest: 1
 });
-const sql = createPgAdapter(databaseUrl);
+const sql = createPgAdapter({
+  connectionString: databaseUrl,
+  max: Math.max(concurrency, 10)
+});
 const pg = createPgredis({
   sql,
   namespace: `${runId}:node`,

@@ -86,6 +86,12 @@ export async function runRedisCases(redis, backend, redisPrefix, iterations, con
   results.push(await runCase("KV read (hot cache)", backend, iterations, concurrency, async (index) => {
     await redis.get(`${redisPrefix}:kv:${index % hotKeyCount}`);
   }));
+  for (const hitRate of [99, 95, 90]) {
+    results.push(await runCase(`KV read (${hitRate}% L1)`, backend, iterations, concurrency, async (index) => {
+      const keyIndex = mixedReadKeyIndex(index, hitRate, hotKeyCount, iterations);
+      await redis.get(`${redisPrefix}:kv:${keyIndex}`);
+    }));
+  }
   results.push(await runCase("Counter increment", backend, iterations, concurrency, (index) =>
     redis.incrby(`${redisPrefix}:counter`, index % 3 === 0 ? 2 : 1)
   ));
@@ -127,6 +133,12 @@ export async function runPgredisCases(pg, backend, tablePrefix, iterations, conc
   results.push(await runCase("KV read (hot cache)", backend, iterations, concurrency, async (index) => {
     await pg.cache.get(`kv:${index % hotKeyCount}`);
   }));
+  for (const hitRate of [99, 95, 90]) {
+    results.push(await runCase(`KV read (${hitRate}% L1)`, backend, iterations, concurrency, async (index) => {
+      const keyIndex = mixedReadKeyIndex(index, hitRate, hotKeyCount, iterations);
+      await pg.cache.get(`kv:${keyIndex}`);
+    }));
+  }
   results.push(await runCase("Counter increment", backend, iterations, concurrency, (index) =>
     pg.counter.incr("counter", index % 3 === 0 ? 2 : 1)
   ));
@@ -151,8 +163,27 @@ export async function runPgredisL1Cases(pg, backend, iterations, concurrency) {
   results.push(await runCase("KV read (hot cache)", backend, iterations, concurrency, async (index) => {
     await pg.cache.get(`kv:${index % hotKeyCount}`);
   }));
+  for (const hitRate of [99, 95, 90]) {
+    await warmHotKeys(pg, hotKeyCount);
+    results.push(await runCase(`KV read (${hitRate}% L1)`, backend, iterations, concurrency, async (index) => {
+      const keyIndex = mixedReadKeyIndex(index, hitRate, hotKeyCount, iterations);
+      await pg.cache.get(`kv:${keyIndex}`);
+    }));
+  }
 
   return results;
+}
+
+async function warmHotKeys(pg, hotKeyCount) {
+  for (let index = 0; index < hotKeyCount; index++) {
+    await pg.cache.get(`kv:${index}`);
+  }
+}
+
+function mixedReadKeyIndex(index, hitRate, hotKeyCount, iterations) {
+  if (index % 100 < hitRate) return index % hotKeyCount;
+  const coldPool = Math.max(1, iterations - hotKeyCount);
+  return hotKeyCount + (index % coldPool);
 }
 
 export async function cleanupRedis(redis, redisPrefix) {

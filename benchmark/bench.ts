@@ -74,15 +74,38 @@ function comparisonRows(results: BenchResult[]): ComparisonRow[] {
   });
 }
 
-function l1SummaryRows(rows: ComparisonRow[]): string[] {
+function isL1ReadOperation(operation: string): boolean {
+  return operation === "KV read (hot cache)" || /^KV read \(\d+% L1\)$/.test(operation);
+}
+
+function mode(result: BenchResult | null, l2: BenchResult | null): string {
+  if (!result) return "-";
+  return result === l2 ? "L2" : "L1";
+}
+
+function appPathSummaryRows(rows: ComparisonRow[]): string[] {
   return rows.map((row) =>
-    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
+    appPathSummaryRow(row)
   );
 }
 
-function compactSummaryRows(rows: ComparisonRow[]): string[] {
+function appPathSummaryRow(row: ComparisonRow): string {
+  const nodeApp = row.nodePostgresL1 ?? row.nodePostgres;
+  const bunApp = row.bunPostgresL1 ?? row.bunPostgres;
+  return `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${mode(nodeApp, row.nodePostgres)} | ${formatOps(nodeApp)} | ${formatRatio(nodeApp, row.nodeRedis)} | ${mode(bunApp, row.bunPostgres)} | ${formatOps(bunApp)} | ${formatRatio(bunApp, row.nodeRedis)} |`;
+}
+
+function l1ReadRows(rows: ComparisonRow[]): string[] {
+  return rows
+    .filter((row) => isL1ReadOperation(row.operation))
+    .map((row) =>
+      `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
+    );
+}
+
+function l2BackendRows(rows: ComparisonRow[]): string[] {
   return rows.map((row) =>
-    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
+    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} |`
   );
 }
 
@@ -107,17 +130,34 @@ function markdown(results: BenchResult[]): string {
     "- The benchmark workflow runs PostgreSQL 18 with asynchronous I/O enabled via `io_method=worker`.",
     "- The workflow gives both service containers `--cpus 2 --memory 2g`.",
     "- Node.js tests run with `node`; Bun.js tests run with `bun`.",
-    "- PostgreSQL columns without `(L1)` use `@postgresx/noredis` with local L1 disabled, so reads hit PostgreSQL. These compare Redis as a service with PostgreSQL as a service.",
-    "- PostgreSQL `(L1)` columns enable pgredis in-process memory caching for the hot-read case. That is a valid application-cache mode for Redis replacement, but it measures local process memory plus PostgreSQL backing storage.",
+    "- Node.js PostgreSQL uses a connection pool sized to the benchmark concurrency.",
+    "- The recommended cache replacement path is L1 in-process memory backed by PostgreSQL L2 storage. L1 rows show that path; L2 rows show the direct PostgreSQL fallback/backend path.",
+    "- The 99%, 95%, and 90% L1 rows intentionally mix local hits with PostgreSQL misses to model realistic cache-aside workloads.",
     "- PostgreSQL tables created by pgredis are `UNLOGGED` by default for cache-like workloads, and the workflow sets `synchronous_commit=off` for the benchmark database. Both choices trade crash-time recency guarantees for cache throughput.",
     "",
-    "## Summary",
+    "## Application Cache Path",
     "",
-    "Ops/sec is higher-is-better. Non-L1 PostgreSQL columns show the service-level backend path; `(L1)` columns show the application hot-read path.",
+    "Ops/sec is higher-is-better. This table follows the recommended Redis replacement shape: KV reads use L1 when a matching L1 scenario exists; writes and non-cache primitives use the PostgreSQL backend path.",
     "",
-    "| Operation | Redis | Node PG | Node PG/Redis | Node PG L1 | Node PG L1/Redis | Bun PG | Bun PG/Redis | Bun PG L1 | Bun PG L1/Redis |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ...l1SummaryRows(rows),
+    "| Operation | Redis | Node PG mode | Node PG | Node PG/Redis | Bun PG mode | Bun PG | Bun PG/Redis |",
+    "| --- | ---: | --- | ---: | ---: | --- | ---: | ---: |",
+    ...appPathSummaryRows(rows),
+    "",
+    "## L1 Read Cache",
+    "",
+    "These rows isolate pgredis local memory cache behavior. Mixed hit-rate rows include PostgreSQL misses and are closer to real cache-aside usage than the 100% hot-cache row.",
+    "",
+    "| Operation | Redis | Node PG L1 | Node PG L1/Redis | Bun PG L1 | Bun PG L1/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ...l1ReadRows(rows),
+    "",
+    "## L2 Backend Path",
+    "",
+    "These rows disable pgredis L1 and measure direct PostgreSQL access. They are useful for fallback sizing and regression tracking, not as the main cache-hit comparison.",
+    "",
+    "| Operation | Redis | Node PG L2 | Node PG L2/Redis | Bun PG L2 | Bun PG L2/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ...l2BackendRows(rows),
     "",
     "## Details",
     "",
@@ -129,7 +169,7 @@ function markdown(results: BenchResult[]): string {
     "",
     "- Redis tests use key prefixes and do not flush the whole database.",
     "- PostgreSQL tests create temporary benchmark tables and drop them at the end.",
-    "- Empty `(L1)` cells mean that operation does not use pgredis L1 in the benchmark; L1 is only meaningful for hot cache reads.",
+    "- L1 applies only to KV reads. Counter, set, and pub/sub rows are functional replacement paths over PostgreSQL, not local-cache shortcuts.",
     "- Numbers are intended for regression tracking, not universal database sizing.",
     "",
     "References behind benchmark design:",
@@ -151,11 +191,11 @@ function readmeSummary(results: BenchResult[]): string {
   const rows = comparisonRows(results);
   return [
     "<!-- BENCHMARK:START -->",
-    "Latest benchmark summary, generated by the GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. Non-L1 PostgreSQL columns show the service-level path; `(L1)` columns show the application hot-read path. See [benchmark.md](./benchmark.md) for full timings and notes.",
+    "Latest benchmark summary, generated by the GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. KV read rows use the recommended pgredis L1+PostgreSQL path when an L1 scenario exists; writes and non-cache primitives use the PostgreSQL backend path. See [benchmark.md](./benchmark.md) for L1 hit-rate rows, L2 fallback rows, full timings, and notes.",
     "",
-    "| Operation | Redis | Node PG | Node PG/Redis | Node PG L1 | Node PG L1/Redis | Bun PG | Bun PG/Redis | Bun PG L1 | Bun PG L1/Redis |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ...compactSummaryRows(rows),
+    "| Operation | Redis | Node PG mode | Node PG | Node PG/Redis | Bun PG mode | Bun PG | Bun PG/Redis |",
+    "| --- | ---: | --- | ---: | ---: | --- | ---: | ---: |",
+    ...appPathSummaryRows(rows),
     "<!-- BENCHMARK:END -->"
   ].join("\n");
 }
