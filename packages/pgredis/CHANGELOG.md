@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.4.0...@postgresx/noredis-v0.5.0) (2026-05-27)
+
+
+### Features
+
+* add ioredis/redis adapters, noredis facade packages, sub-module exports, and release-please config ([5d39b5b](https://github.com/zuohuadong/postgresx/commit/5d39b5b487f3edc21124cf08800091d59d8d209d))
+
+
+### Documentation
+
+* update README Redis compatibility tables and mark migration features complete ([f0a60c4](https://github.com/zuohuadong/postgresx/commit/f0a60c4dcc6e8a17d831e2a26ea4eccde0d062b7))
+
 ## [0.4.0](https://github.com/zuohuadong/postgresx/compare/@postgresx/noredis-v0.3.0...@postgresx/noredis-v0.4.0) (2026-05-26)
 
 
