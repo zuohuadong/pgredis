@@ -88,6 +88,35 @@ class MockSql implements BunSqlLike {
       }) as T[];
     }
 
+    if (normalized.startsWith("SELECT KEY FROM")) {
+      const namespace = String(params[0]);
+      const pattern = this.likePatternToRegExp(String(params[1]));
+      const cursor = params.length > 3 ? String(params[2] ?? "") : "";
+      const limit = Number(params[params.length - 1] ?? 1000);
+      const rows = Array.from(this.rows.keys())
+        .flatMap((compoundKey) => {
+          const [rowNamespace, key] = compoundKey.split("\0");
+          const row = this.getLiveRow(rowNamespace!, key!);
+          return rowNamespace === namespace && row && pattern.test(key!) && key! > cursor ? [key!] : [];
+        })
+        .sort()
+        .slice(0, limit)
+        .map((key) => ({ key }));
+      return rows as T[];
+    }
+
+    if (normalized.startsWith("WITH SOURCE")) {
+      const namespace = String(params[0]);
+      const key = String(params[1]);
+      const newKey = String(params[2]);
+      const row = this.getLiveRow(namespace, key);
+      if (!row) return [] as T[];
+      this.rows.delete(this.rowKey(namespace, newKey));
+      this.rows.delete(this.rowKey(namespace, key));
+      this.rows.set(this.rowKey(namespace, newKey), row);
+      return [{ key: newKey }] as T[];
+    }
+
     if (normalized.startsWith("DELETE FROM") && normalized.includes("EXPIRES_AT IS NOT NULL")) {
       const deleted: Array<{ namespace: string; key: string }> = [];
       for (const [compoundKey, row] of this.rows.entries()) {
@@ -150,6 +179,27 @@ class MockSql implements BunSqlLike {
 
   private toDate(expiresAt: number | null): Date | null {
     return expiresAt === null ? null : new Date(expiresAt);
+  }
+
+  private likePatternToRegExp(pattern: string): RegExp {
+    let source = "^";
+    for (let index = 0; index < pattern.length; index++) {
+      const char = pattern[index]!;
+      if (char === "\\") {
+        source += this.escapeRegExp(pattern[++index] ?? "");
+      } else if (char === "%") {
+        source += ".*";
+      } else if (char === "_") {
+        source += ".";
+      } else {
+        source += this.escapeRegExp(char);
+      }
+    }
+    return new RegExp(`${source}$`);
+  }
+
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 }
 
@@ -220,6 +270,37 @@ describe("PgKvCache", () => {
     await expect(cache.clearPrefix("channel:")).resolves.toBe(2);
     await expect(cache.get("channel:a")).resolves.toBeNull();
     await expect(cache.get("option:c")).resolves.toEqual({ id: 3 });
+  });
+
+  test("supports Redis-style key globbing and cursor scans", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "models", l1: false });
+
+    await cache.mset([
+      ["user:1", { id: 1 }],
+      ["user:2", { id: 2 }],
+      ["session:1", { id: 3 }]
+    ]);
+
+    await expect(cache.keys("user:*")).resolves.toEqual(["user:1", "user:2"]);
+    await expect(cache.keys("*:1")).resolves.toEqual(["session:1", "user:1"]);
+
+    const first = await cache.scan(null, 1, "user:*");
+    expect(first).toEqual({ cursor: "user:1", keys: ["user:1"] });
+    await expect(cache.scan(first.cursor, 10, "user:*")).resolves.toEqual({ cursor: null, keys: ["user:2"] });
+  });
+
+  test("rename overwrites the destination key", async () => {
+    const sql = new MockSql();
+    const cache = new PgKvCache({ sql, namespace: "models", l1: false });
+
+    await cache.set("old", { id: 1 });
+    await cache.set("new", { id: 2 });
+
+    await expect(cache.rename("old", "new")).resolves.toBe(true);
+    await expect(cache.get("old")).resolves.toBeNull();
+    await expect(cache.get("new")).resolves.toEqual({ id: 1 });
+    await expect(cache.rename("missing", "newer")).resolves.toBe(false);
   });
 
   test("applies remote invalidation and ignores self notifications", async () => {

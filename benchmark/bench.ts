@@ -11,6 +11,9 @@ interface BenchResult {
   concurrency: number;
   durationMs: number;
   opsPerSecond: number;
+  avgMs: number;
+  p50Ms: number;
+  p99Ms: number;
 }
 
 interface ComparisonRow {
@@ -54,6 +57,15 @@ function formatOps(result: BenchResult | null): string {
   return result ? formatNumber(result.opsPerSecond) : "-";
 }
 
+function formatMs(value: number): string {
+  return value < 1 ? value.toFixed(3) : value < 100 ? value.toFixed(2) : formatNumber(value);
+}
+
+function formatLatency(result: BenchResult | null): string {
+  if (!result) return "-";
+  return `${formatMs(result.p50Ms)}`;
+}
+
 function formatRatio(result: BenchResult | null, baseline: BenchResult | null): string {
   if (!result || !baseline || baseline.opsPerSecond <= 0) return "-";
   return `${formatNumber(result.opsPerSecond / baseline.opsPerSecond)}x`;
@@ -78,34 +90,34 @@ function isL1ReadOperation(operation: string): boolean {
   return operation === "KV read (hot cache)" || /^KV read \(\d+% L1\)$/.test(operation);
 }
 
-function mode(result: BenchResult | null, l2: BenchResult | null): string {
-  if (!result) return "-";
-  return result === l2 ? "L2" : "L1";
-}
-
 function appPathSummaryRows(rows: ComparisonRow[]): string[] {
   return rows.map((row) =>
     appPathSummaryRow(row)
   );
 }
 
+function operationLabel(row: ComparisonRow): string {
+  const isL1 = isL1ReadOperation(row.operation);
+  return isL1 ? `${row.operation} L1` : row.operation;
+}
+
 function appPathSummaryRow(row: ComparisonRow): string {
   const nodeApp = row.nodePostgresL1 ?? row.nodePostgres;
   const bunApp = row.bunPostgresL1 ?? row.bunPostgres;
-  return `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${mode(nodeApp, row.nodePostgres)} | ${formatOps(nodeApp)} | ${formatRatio(nodeApp, row.nodeRedis)} | ${mode(bunApp, row.bunPostgres)} | ${formatOps(bunApp)} | ${formatRatio(bunApp, row.nodeRedis)} |`;
+  return `| ${operationLabel(row)} | ${formatOps(row.nodeRedis)} | ${formatLatency(row.nodeRedis)} | ${formatOps(nodeApp)} | ${formatLatency(nodeApp)} | ${formatRatio(nodeApp, row.nodeRedis)} | ${formatOps(bunApp)} | ${formatLatency(bunApp)} | ${formatRatio(bunApp, row.nodeRedis)} |`;
 }
 
 function l1ReadRows(rows: ComparisonRow[]): string[] {
   return rows
     .filter((row) => isL1ReadOperation(row.operation))
     .map((row) =>
-      `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
+      `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatLatency(row.nodeRedis)} | ${formatOps(row.nodePostgresL1)} | ${formatLatency(row.nodePostgresL1)} | ${formatRatio(row.nodePostgresL1, row.nodeRedis)} | ${formatOps(row.bunPostgresL1)} | ${formatLatency(row.bunPostgresL1)} | ${formatRatio(row.bunPostgresL1, row.nodeRedis)} |`
     );
 }
 
 function l2BackendRows(rows: ComparisonRow[]): string[] {
   return rows.map((row) =>
-    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} |`
+    `| ${row.operation} | ${formatOps(row.nodeRedis)} | ${formatLatency(row.nodeRedis)} | ${formatOps(row.nodePostgres)} | ${formatLatency(row.nodePostgres)} | ${formatRatio(row.nodePostgres, row.nodeRedis)} | ${formatOps(row.bunPostgres)} | ${formatLatency(row.bunPostgres)} | ${formatRatio(row.bunPostgres, row.nodeRedis)} |`
   );
 }
 
@@ -113,7 +125,7 @@ function markdown(results: BenchResult[]): string {
   const generatedAt = new Date().toISOString();
   const rows = comparisonRows(results);
   const details = results.map((result) =>
-    `| ${result.operation} | ${result.backend} | ${result.iterations} | ${result.concurrency} | ${formatNumber(result.durationMs)} | ${formatNumber(result.opsPerSecond)} |`
+    `| ${result.operation} | ${result.backend} | ${result.iterations} | ${result.concurrency} | ${formatNumber(result.durationMs)} | ${formatNumber(result.opsPerSecond)} | ${formatMs(result.avgMs)} | ${formatMs(result.p50Ms)} | ${formatMs(result.p99Ms)} |`
   );
 
   return [
@@ -139,30 +151,30 @@ function markdown(results: BenchResult[]): string {
     "",
     "Ops/sec is higher-is-better. This table follows the recommended Redis replacement shape: KV reads use L1 when a matching L1 scenario exists; writes and non-cache primitives use the PostgreSQL backend path.",
     "",
-    "| Operation | Redis | Node PG mode | Node PG | Node PG/Redis | Bun PG mode | Bun PG | Bun PG/Redis |",
-    "| --- | ---: | --- | ---: | ---: | --- | ---: | ---: |",
+    "| Operation | Redis | Redis p50 ms | Node PG | Node PG p50 ms | Node PG/Redis | Bun PG | Bun PG p50 ms | Bun PG/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...appPathSummaryRows(rows),
     "",
     "## L1 Read Cache",
     "",
     "These rows isolate pgredis local memory cache behavior. Mixed hit-rate rows include PostgreSQL misses and are closer to real cache-aside usage than the 100% hot-cache row.",
     "",
-    "| Operation | Redis | Node PG L1 | Node PG L1/Redis | Bun PG L1 | Bun PG L1/Redis |",
-    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Operation | Redis | Redis p50 ms | Node PG L1 | Node PG L1 p50 ms | Node PG L1/Redis | Bun PG L1 | Bun PG L1 p50 ms | Bun PG L1/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...l1ReadRows(rows),
     "",
     "## L2 Backend Path",
     "",
     "These rows disable pgredis L1 and measure direct PostgreSQL access. They are useful for fallback sizing and regression tracking, not as the main cache-hit comparison.",
     "",
-    "| Operation | Redis | Node PG L2 | Node PG L2/Redis | Bun PG L2 | Bun PG L2/Redis |",
-    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Operation | Redis | Redis p50 ms | Node PG L2 | Node PG L2 p50 ms | Node PG L2/Redis | Bun PG L2 | Bun PG L2 p50 ms | Bun PG L2/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...l2BackendRows(rows),
     "",
     "## Details",
     "",
-    "| Operation | Backend | Iterations | Concurrency | Duration ms | Ops/sec |",
-    "| --- | --- | ---: | ---: | ---: | ---: |",
+    "| Operation | Backend | Iterations | Concurrency | Duration ms | Ops/sec | Avg ms | p50 ms | p99 ms |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...details,
     "",
     "Notes:",
@@ -193,8 +205,8 @@ function readmeSummary(results: BenchResult[]): string {
     "<!-- BENCHMARK:START -->",
     "Latest benchmark summary, generated by the GitHub Actions benchmark workflow. Ops/sec is higher-is-better; ratios compare against Node.js + Redis for the same operation. KV read rows use the recommended pgredis L1+PostgreSQL path when an L1 scenario exists; writes and non-cache primitives use the PostgreSQL backend path. See [benchmark.md](./benchmark.md) for L1 hit-rate rows, L2 fallback rows, full timings, and notes.",
     "",
-    "| Operation | Redis | Node PG mode | Node PG | Node PG/Redis | Bun PG mode | Bun PG | Bun PG/Redis |",
-    "| --- | ---: | --- | ---: | ---: | --- | ---: | ---: |",
+    "| Operation | Redis | Redis p50 ms | Node PG | Node PG p50 ms | Node PG/Redis | Bun PG | Bun PG p50 ms | Bun PG/Redis |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...appPathSummaryRows(rows),
     "<!-- BENCHMARK:END -->"
   ].join("\n");

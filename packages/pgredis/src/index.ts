@@ -26,3 +26,4 @@ export * from "./set";
 export * from "./sql";
 export * from "./sorted-set";
 export * from "./stream";
+export * from "./errors";

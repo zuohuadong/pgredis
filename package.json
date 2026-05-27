@@ -7,8 +7,8 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "cd packages/bun-listen && bun run build && cd ../pgredis && bun run build",
-    "check": "cd packages/bun-listen && bun run check && cd ../pgredis && bun run check && cd ../.. && bunx tsc --noEmit -p tsconfig.json",
+    "build": "cd packages/bun-listen && bun run build && cd ../pgredis && bun run build && cd ../noredis-ioredis && bun run build && cd ../noredis-redis && bun run build",
+    "check": "cd packages/bun-listen && bun run check && cd ../pgredis && bun run check && cd ../noredis-ioredis && bun run check && cd ../noredis-redis && bun run check && cd ../.. && bunx tsc --noEmit -p tsconfig.json",
     "test": "bun test packages/",
     "test:integration": "bun test packages/pgredis/src/integration.test.ts",
     "smoke:pack": "node scripts/smoke-packages.mjs",

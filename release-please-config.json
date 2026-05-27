@@ -40,6 +40,16 @@
       "component": "@postgresx/noredis",
       "changelog-path": "CHANGELOG.md"
     },
+    "packages/noredis-ioredis": {
+      "release-type": "node",
+      "component": "@postgresx/noredis-ioredis",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "packages/noredis-redis": {
+      "release-type": "node",
+      "component": "@postgresx/noredis-redis",
+      "changelog-path": "CHANGELOG.md"
+    },
     "packages/bun-listen": {
       "release-type": "node",
       "component": "@postgresx/bun-listen",

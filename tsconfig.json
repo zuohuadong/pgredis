@@ -3,6 +3,16 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@postgresx/noredis/adapters/ioredis": [
+        "packages/pgredis/src/adapters/ioredis.ts"
+      ],
+      "@postgresx/noredis/adapters/redis": [
+        "packages/pgredis/src/adapters/redis.ts"
+      ]
+    },
     "strict": true,
     "noEmit": true,
     "isolatedModules": true,

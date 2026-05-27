@@ -215,16 +215,25 @@ export class PgSortedSet {
 
   async zpopmin(key: string, count = 1): Promise<PgSortedSetMember[]> {
     const rows = await this.sql.unsafe<MemberRow>(
-      `DELETE FROM ${this.quotedTableName}
-       WHERE (namespace, key, member) IN (
-         SELECT namespace, key, member
+      `WITH picked AS (
+         SELECT namespace, key, member, score, row_number() OVER (ORDER BY score ASC, member ASC) AS rank
          FROM ${this.quotedTableName}
          WHERE namespace = $1 AND key = $2
            AND (expires_at IS NULL OR expires_at > NOW())
          ORDER BY score ASC, member ASC
          LIMIT $3
+       ), deleted AS (
+         DELETE FROM ${this.quotedTableName} target
+         USING picked
+         WHERE target.namespace = picked.namespace
+           AND target.key = picked.key
+           AND target.member = picked.member
+         RETURNING target.member, target.score
        )
-       RETURNING member, score`,
+       SELECT deleted.member, deleted.score
+       FROM deleted
+       JOIN picked ON picked.member = deleted.member
+       ORDER BY picked.rank ASC`,
       [this.namespace, key, Math.max(1, Math.floor(count))]
     );
     return rows.map((row) => ({ member: row.member, score: Number(row.score) }));
@@ -284,6 +293,68 @@ export class PgSortedSet {
       [this.namespace, key]
     );
     return rows[0]?.ttl_ms === null || rows[0]?.ttl_ms === undefined ? null : Number(rows[0].ttl_ms);
+  }
+
+
+  async zcard(key: string): Promise<number> {
+    const rows = await this.sql.unsafe<CountRow>(
+      `SELECT COUNT(*)::bigint AS count FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())`,
+      [this.namespace, key]
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async zrevrange(key: string, start = 0, stop = -1, options: { withScores?: boolean } = {}): Promise<string[] | PgSortedSetMember[]> {
+    return this.zrange(key, start, stop, { ...options, desc: true });
+  }
+
+  async zincrby(key: string, amount: number, member: string): Promise<number> {
+    if (!Number.isFinite(amount)) throw new Error(`Invalid zincrby amount: ${amount}`);
+    const rows = await this.sql.unsafe<MemberRow>(
+      `INSERT INTO ${this.quotedTableName} (namespace, key, member, score, expires_at, updated_at)
+       VALUES (
+         $1,
+         $2,
+         $3,
+         $4,
+         (SELECT MAX(expires_at) FROM ${this.quotedTableName} WHERE namespace = $1 AND key = $2),
+         NOW()
+       )
+       ON CONFLICT (namespace, key, member) DO UPDATE
+       SET score = ${this.quotedTableName}.score + EXCLUDED.score,
+           updated_at = NOW()
+       RETURNING score`,
+      [this.namespace, key, member, amount]
+    );
+    return Number(rows[0]?.score ?? amount);
+  }
+
+  async zpopmax(key: string, count = 1): Promise<PgSortedSetMember[]> {
+    const rows = await this.sql.unsafe<MemberRow>(
+      `WITH picked AS (
+         SELECT namespace, key, member, score, row_number() OVER (ORDER BY score DESC, member DESC) AS rank
+         FROM ${this.quotedTableName}
+         WHERE namespace = $1 AND key = $2
+           AND (expires_at IS NULL OR expires_at > NOW())
+         ORDER BY score DESC, member DESC
+         LIMIT $3
+       ), deleted AS (
+         DELETE FROM ${this.quotedTableName} target
+         USING picked
+         WHERE target.namespace = picked.namespace
+           AND target.key = picked.key
+           AND target.member = picked.member
+         RETURNING target.member, target.score
+       )
+       SELECT deleted.member, deleted.score
+       FROM deleted
+       JOIN picked ON picked.member = deleted.member
+       ORDER BY picked.rank ASC`,
+      [this.namespace, key, Math.max(1, Math.floor(count))]
+    );
+    return rows.map((r) => ({ member: r.member, score: Number(r.score) }));
   }
 
   async cleanupExpired(limit = 1000): Promise<number> {

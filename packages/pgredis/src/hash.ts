@@ -264,6 +264,52 @@ export class PgHash {
     return rows[0]?.ttl_ms === null || rows[0]?.ttl_ms === undefined ? null : Number(rows[0].ttl_ms);
   }
 
+
+  async hmget<T = unknown>(key: string, ...fields: string[]): Promise<Array<T | null>> {
+    if (fields.length === 0) return [];
+    const placeholders = fields.map((_, i) => `$${i + 3}`).join(", ");
+    const rows = await this.sql.unsafe<HashRow>(
+      `SELECT field, value FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key = $2 AND field IN (${placeholders})
+         AND (expires_at IS NULL OR expires_at > NOW())`,
+      [this.namespace, key, ...fields]
+    );
+    const map = new Map(rows.map((r) => [r.field, parseValue<T>(r.value)]));
+    return fields.map((field) => map.get(field) ?? null);
+  }
+
+  async hkeys(key: string): Promise<string[]> {
+    const rows = await this.sql.unsafe<{ field: string }>(
+      `SELECT field FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY field ASC`,
+      [this.namespace, key]
+    );
+    return rows.map((r) => r.field);
+  }
+
+  async hvals<T = unknown>(key: string): Promise<T[]> {
+    const rows = await this.sql.unsafe<HashRow>(
+      `SELECT value FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY field ASC`,
+      [this.namespace, key]
+    );
+    return rows.map((r) => parseValue<T>(r.value));
+  }
+
+  async hstrlen(key: string, field: string): Promise<number> {
+    const rows = await this.sql.unsafe<{ length: number | string }>(
+      `SELECT LENGTH(value #>> '{}') AS length FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key = $2 AND field = $3
+         AND (expires_at IS NULL OR expires_at > NOW())`,
+      [this.namespace, key, field]
+    );
+    return rows[0] ? Number(rows[0].length) : 0;
+  }
+
   async cleanupExpired(limit = 1000): Promise<number> {
     const rows = await this.sql.unsafe<{ field: string }>(
       `DELETE FROM ${this.quotedTableName}

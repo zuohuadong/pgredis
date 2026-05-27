@@ -6,8 +6,20 @@ export function readPositiveInteger(name, fallback) {
   return Math.floor(parsed);
 }
 
+
+function computeLatencies(samples) {
+  if (samples.length === 0) return { avgMs: 0, p50Ms: 0, p99Ms: 0 };
+  samples.sort((a, b) => a - b);
+  const sum = samples.reduce((acc, v) => acc + v, 0);
+  const avgMs = sum / samples.length;
+  const p50Ms = samples[Math.floor(samples.length * 0.5)];
+  const p99Ms = samples[Math.floor(samples.length * 0.99)];
+  return { avgMs, p50Ms, p99Ms };
+}
+
 export async function runCase(operation, backend, iterations, concurrency, fn) {
   let next = 0;
+  const latencies = [];
   const start = performance.now();
 
   await Promise.all(
@@ -15,7 +27,9 @@ export async function runCase(operation, backend, iterations, concurrency, fn) {
       while (true) {
         const index = next++;
         if (index >= iterations) return;
+        const t0 = performance.now();
         await fn(index);
+        latencies.push(performance.now() - t0);
       }
     })
   );
@@ -27,12 +41,14 @@ export async function runCase(operation, backend, iterations, concurrency, fn) {
     iterations,
     concurrency,
     durationMs,
-    opsPerSecond: iterations / (durationMs / 1000)
+    opsPerSecond: iterations / (durationMs / 1000),
+    ...computeLatencies(latencies)
   };
 }
 
 export async function runGroupedCase(operation, backend, logicalOperations, groups, concurrency, fn) {
   let next = 0;
+  const latencies = [];
   const start = performance.now();
 
   await Promise.all(
@@ -40,7 +56,9 @@ export async function runGroupedCase(operation, backend, logicalOperations, grou
       while (true) {
         const index = next++;
         if (index >= groups) return;
+        const t0 = performance.now();
         await fn(index);
+        latencies.push(performance.now() - t0);
       }
     })
   );
@@ -52,7 +70,8 @@ export async function runGroupedCase(operation, backend, logicalOperations, grou
     iterations: logicalOperations,
     concurrency,
     durationMs,
-    opsPerSecond: logicalOperations / (durationMs / 1000)
+    opsPerSecond: logicalOperations / (durationMs / 1000),
+    ...computeLatencies(latencies)
   };
 }
 

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const root = new URL("..", import.meta.url);
-const packageDirs = ["packages/bun-listen", "packages/pgredis"];
+const packageDirs = ["packages/bun-listen", "packages/pgredis", "packages/noredis-ioredis", "packages/noredis-redis"];
 const dependencyFields = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
 
 async function run(command, args, options = {}) {

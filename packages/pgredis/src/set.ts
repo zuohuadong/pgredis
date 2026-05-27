@@ -254,6 +254,64 @@ export class PgSet {
     return rows[0]?.ttl_ms === null || rows[0]?.ttl_ms === undefined ? null : Number(rows[0].ttl_ms);
   }
 
+
+  async spop(key: string, count = 1): Promise<string[]> {
+    const limit = Math.max(1, Math.floor(count));
+    const rows = await this.sql.unsafe<MemberRow>(
+      `DELETE FROM ${this.quotedTableName}
+       WHERE (namespace, key, member) IN (
+         SELECT namespace, key, member FROM ${this.quotedTableName}
+         WHERE namespace = $1 AND key = $2
+           AND (expires_at IS NULL OR expires_at > NOW())
+         ORDER BY RANDOM() LIMIT $3
+       )
+       RETURNING member`,
+      [this.namespace, key, limit]
+    );
+    return rows.map((r) => r.member);
+  }
+
+  async srandmember(key: string, count = 1): Promise<string[]> {
+    const limit = Math.abs(Math.floor(count));
+    if (limit === 0) return [];
+    const rows = await this.sql.unsafe<MemberRow>(
+      `SELECT member FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key = $2
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY RANDOM() LIMIT $3`,
+      [this.namespace, key, limit]
+    );
+    return rows.map((r) => r.member);
+  }
+
+  async smove(source: string, destination: string, member: string): Promise<boolean> {
+    const rows = await this.sql.unsafe<{ member: string }>(
+      `WITH moved AS (
+         DELETE FROM ${this.quotedTableName}
+         WHERE namespace = $1
+           AND key = $2
+           AND member = $4
+           AND (expires_at IS NULL OR expires_at > NOW())
+         RETURNING member
+       ), inserted AS (
+         INSERT INTO ${this.quotedTableName} (namespace, key, member, expires_at, updated_at)
+         SELECT
+           $1,
+           $3,
+           member,
+           (SELECT MAX(expires_at) FROM ${this.quotedTableName} WHERE namespace = $1 AND key = $3),
+           NOW()
+         FROM moved
+         ON CONFLICT (namespace, key, member) DO UPDATE
+         SET updated_at = NOW()
+         RETURNING member
+       )
+       SELECT member FROM moved`,
+      [this.namespace, source, destination, member]
+    );
+    return rows.length > 0;
+  }
+
   async cleanupExpired(limit = 1000): Promise<number> {
     const rows = await this.sql.unsafe<{ member: string }>(
       `DELETE FROM ${this.quotedTableName}

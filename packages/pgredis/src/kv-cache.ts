@@ -136,6 +136,16 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
 
+function redisPatternToSqlLike(pattern: string): string {
+  let sqlPattern = "";
+  for (const char of pattern) {
+    if (char === "*") sqlPattern += "%";
+    else if (char === "?") sqlPattern += "_";
+    else sqlPattern += escapeLike(char);
+  }
+  return sqlPattern;
+}
+
 export class PgKvCache {
   readonly namespace: string;
   readonly tableName: string;
@@ -536,6 +546,112 @@ export class PgKvCache {
       return true;
     }
     return false;
+  }
+
+
+  async keys(pattern = "*", limit = 1000): Promise<string[]> {
+    const like = redisPatternToSqlLike(pattern);
+    const rows = await this.sql.unsafe<{ key: string }>(
+      `SELECT key FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\'
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY key ASC LIMIT $3`,
+      [this.namespace, like, Math.max(1, Math.floor(limit))]
+    );
+    return rows.map((r) => r.key);
+  }
+
+  async scan(cursor: string | null = null, count = 100, pattern = "*"): Promise<{ cursor: string | null; keys: string[] }> {
+    const like = redisPatternToSqlLike(pattern);
+    const limit = Math.max(1, Math.floor(count));
+    const rows = await this.sql.unsafe<{ key: string }>(
+      `SELECT key FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\'
+         AND key > COALESCE($3::text, '')
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY key ASC LIMIT $4`,
+      [this.namespace, like, cursor, limit]
+    );
+    return {
+      cursor: rows.length === limit ? rows[rows.length - 1]!.key : null,
+      keys: rows.map((r) => r.key)
+    };
+  }
+
+  async rename(key: string, newKey: string): Promise<boolean> {
+    if (key === newKey) return await this.get(key) !== null;
+    const rows = await this.sql.unsafe<{ key: string }>(
+      `WITH source AS (
+         SELECT key
+         FROM ${this.quotedTableName}
+         WHERE namespace = $1
+           AND key = $2
+           AND (expires_at IS NULL OR expires_at > NOW())
+         LIMIT 1
+       ), deleted_target AS (
+         DELETE FROM ${this.quotedTableName}
+         WHERE namespace = $1
+           AND key = $3
+           AND EXISTS (SELECT 1 FROM source)
+       )
+       UPDATE ${this.quotedTableName}
+       SET key = $3,
+           updated_at = NOW()
+       WHERE namespace = $1
+         AND key = $2
+         AND EXISTS (SELECT 1 FROM source)
+       RETURNING key`,
+      [this.namespace, key, newKey]
+    );
+    if (rows.length === 0) return false;
+    this.deleteL1(key);
+    this.deleteL1(newKey);
+    return true;
+  }
+
+  async type(key: string): Promise<"string" | "none"> {
+    const value = await this.get(key);
+    return value === null ? "none" : "string";
+  }
+
+  async unlink(...keys: string[]): Promise<number> {
+    if (keys.length === 0) return 0;
+    const placeholders = keys.map((_, i) => `$${i + 2}`).join(", ");
+    const rows = await this.sql.unsafe<{ key: string }>(
+      `DELETE FROM ${this.quotedTableName}
+       WHERE namespace = $1 AND key IN (${placeholders})
+       RETURNING key`,
+      [this.namespace, ...keys]
+    );
+    for (const r of rows) this.deleteL1(r.key);
+    return rows.length;
+  }
+
+  async setex<T = unknown>(key: string, seconds: number, value: T): Promise<"OK"> {
+    await this.set(key, value, { ttlMs: seconds * 1000 });
+    return "OK";
+  }
+
+  async psetex<T = unknown>(key: string, milliseconds: number, value: T): Promise<"OK"> {
+    await this.set(key, value, { ttlMs: milliseconds });
+    return "OK";
+  }
+
+  async setnx<T = unknown>(key: string, value: T): Promise<number> {
+    const written = await this.set(key, value, { nx: true });
+    return written ? 1 : 0;
+  }
+
+  async getset<T = unknown>(key: string, value: T): Promise<T | null> {
+    const old = await this.get<T>(key);
+    await this.set(key, value);
+    return old;
+  }
+
+  async getdel<T = unknown>(key: string): Promise<T | null> {
+    const value = await this.get<T>(key);
+    if (value !== null) await this.delete(key);
+    return value;
   }
 
   stats(): PgKvCacheStats {

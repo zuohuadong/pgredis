@@ -32,14 +32,54 @@
       "import": "./dist/adapters/web.js",
       "default": "./dist/adapters/web.js"
     },
+    "./adapters/ioredis": {
+      "types": "./dist/adapters/ioredis.d.ts",
+      "import": "./dist/adapters/ioredis.js",
+      "default": "./dist/adapters/ioredis.js"
+    },
+    "./adapters/redis": {
+      "types": "./dist/adapters/redis.d.ts",
+      "import": "./dist/adapters/redis.js",
+      "default": "./dist/adapters/redis.js"
+    },
     "./kv-cache": {
       "types": "./dist/kv-cache.d.ts",
       "import": "./dist/kv-cache.js",
       "default": "./dist/kv-cache.js"
+    },
+    "./kv": {
+      "types": "./dist/kv.d.ts",
+      "import": "./dist/kv.js",
+      "default": "./dist/kv.js"
+    },
+    "./hash": {
+      "types": "./dist/hash-index.d.ts",
+      "import": "./dist/hash-index.js",
+      "default": "./dist/hash-index.js"
+    },
+    "./set": {
+      "types": "./dist/set-index.d.ts",
+      "import": "./dist/set-index.js",
+      "default": "./dist/set-index.js"
+    },
+    "./sorted-set": {
+      "types": "./dist/sorted-set-index.d.ts",
+      "import": "./dist/sorted-set-index.js",
+      "default": "./dist/sorted-set-index.js"
+    },
+    "./list": {
+      "types": "./dist/list-index.d.ts",
+      "import": "./dist/list-index.js",
+      "default": "./dist/list-index.js"
+    },
+    "./pubsub": {
+      "types": "./dist/pubsub-index.d.ts",
+      "import": "./dist/pubsub-index.js",
+      "default": "./dist/pubsub-index.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/adapters/bun.ts src/adapters/node.ts src/adapters/web.ts src/kv-cache.ts --format esm --dts --clean --out-dir dist --external pg --external pg-boss --external @postgresx/bun-listen",
+    "build": "tsup src/index.ts src/adapters/bun.ts src/adapters/node.ts src/adapters/web.ts src/adapters/ioredis.ts src/adapters/redis.ts src/kv-cache.ts src/kv.ts src/hash-index.ts src/set-index.ts src/sorted-set-index.ts src/list-index.ts src/pubsub-index.ts --format esm --dts --clean --out-dir dist --external pg --external pg-boss --external @postgresx/bun-listen",
     "test": "bun test src",
     "check": "tsc --noEmit -p tsconfig.json"
   },

@@ -20,6 +20,12 @@ Runtime adapters:
 - Bun: use `Bun.SQL` through `@postgresx/noredis/adapters/bun`, and use
   `@postgresx/bun-listen` for low-level realtime notifications.
 - Node.js: use the `pg` package through `@postgresx/noredis/adapters/node`.
+- Redis-client-shaped migration facades: use
+  `@postgresx/noredis/adapters/ioredis` or `@postgresx/noredis/adapters/redis`
+  when existing code expects high-frequency `ioredis` or node-redis method
+  names. These are whitelisted facades over `PgredisClient`, not Redis TCP
+  clients. Thin package aliases are also available as
+  `@postgresx/noredis-ioredis` and `@postgresx/noredis-redis`.
 
 The published `@postgresx/noredis` package does not install `pg`, `pg-boss`, Redis clients,
 or `@postgresx/bun-listen` for you. Install those only for the features you use.
@@ -229,7 +235,7 @@ Redis protocol or supporting every Redis command.
 
 | Capability | ioredis | pgredis | Launch implication |
 | --- | --- | --- | --- |
-| Protocol and command surface | Sends Redis commands and supports arbitrary Redis command methods. | Exposes typed PostgreSQL-backed primitives only. | Migration requires code changes. Redis command compatibility is intentionally out of scope. |
+| Protocol and command surface | Sends Redis commands and supports arbitrary Redis command methods. | Exposes typed PostgreSQL-backed primitives plus whitelisted ioredis/node-redis-shaped facades. | Migration still requires code changes. Redis wire protocol compatibility is intentionally out of scope. |
 | Runtime dependency | Requires Redis, Redis-compatible service, or Redis Cluster/Sentinel. | Requires PostgreSQL; optional `pg`, `pg-boss`, or `@postgresx/bun-listen` only for selected features. | Good fit for teams removing a separate Redis tier. |
 | Strings / KV / TTL | Full Redis string command surface. | JSONB KV cache with TTL, batch get/set, prefix clear, optional local L1 cache, notification invalidation, `NX`/`XX`, CAS, `expire`, `persist`, `touch`, and pluggable serialization. | Covers cache/session-style values, but not byte-string commands such as `APPEND`, `GETRANGE`, or `SETRANGE`. |
 | Hashes, lists, sets, sorted sets | Native Redis data structures and command coverage. | PostgreSQL table-backed helpers for common hash/list/set/zset operations. | Covers common app usage; list blocking pop is a polling migration bridge, not a scheduler. |
@@ -275,6 +281,11 @@ The highest-value Redis migration features now have first-pass APIs and tests:
 - Bun: 通过 `@postgresx/noredis/adapters/bun` 使用 `Bun.SQL`，并使用
   `@postgresx/bun-listen` 进行底层实时通知。
 - Node.js: 通过 `@postgresx/noredis/adapters/node` 使用 `pg` 包。
+- Redis client 形状的迁移外观：当现有代码需要高频 `ioredis` 或 node-redis
+  方法名时，使用 `@postgresx/noredis/adapters/ioredis` 或
+  `@postgresx/noredis/adapters/redis`。这些是 `PgredisClient` 之上的白名单外观，
+  不是 Redis TCP 客户端。薄 package alias 也可使用
+  `@postgresx/noredis-ioredis` 和 `@postgresx/noredis-redis`。
 
 已发布的 `@postgresx/noredis` 包不会自动安装 `pg`、`pg-boss`、Redis 客户端
 或 `@postgresx/bun-listen`。请仅安装你使用的功能所需的依赖。
@@ -446,7 +457,7 @@ GitHub Actions 基准测试工作流会在 benchmark 相关文件变化时运行
 
 | 能力 | ioredis | pgredis | 发布影响 |
 | --- | --- | --- | --- |
-| 协议和命令表面 | 发送 Redis 命令并支持任意 Redis 命令方法。 | 仅公开类型化的 PostgreSQL 支持的原语。 | 迁移需要代码更改。Redis 命令兼容性有意不在范围内。 |
+| 协议和命令表面 | 发送 Redis 命令并支持任意 Redis 命令方法。 | 公开类型化 PostgreSQL 原语，并提供白名单内的 ioredis/node-redis 形状外观。 | 迁移仍需要代码更改。Redis wire protocol 兼容性有意不在范围内。 |
 | 运行时依赖 | 需要 Redis、Redis 兼容服务或 Redis Cluster/Sentinel。 | 需要 PostgreSQL；仅为选定功能可选安装 `pg`、`pg-boss` 或 `@postgresx/bun-listen`。 | 适合希望移除独立 Redis 层的团队。 |
 | 字符串 / KV / TTL | 完整的 Redis 字符串命令表面。 | JSONB KV 缓存，支持 TTL、批量 get/set、前缀清除、可选本地 L1 缓存和通知失效。 | 覆盖缓存/会话样式的值，但不支持字节字符串命令如 `APPEND`、`GETRANGE` 或 `SETRANGE`。 |
 | 哈希、列表、集合、有序集合 | 原生 Redis 数据结构和命令覆盖。 | PostgreSQL 表支持的常见 hash/list/set/zset 操作辅助函数。 | 覆盖常见应用用法；高级/阻塞/列表突变和完整命令对等性不完整。 |
