@@ -1,11 +1,13 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const root = new URL("..", import.meta.url);
+const packageDirs = ["packages/bun-listen", "packages/pgredis", "packages/noredis-ioredis", "packages/noredis-redis"];
+const dependencyFields = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
 
 async function run(command, args, options = {}) {
   const { stdout, stderr } = await exec(command, args, {
@@ -27,16 +29,64 @@ async function packPackage(packageDir, destination) {
   return join(destination, fileName);
 }
 
+async function readJson(file) {
+  return JSON.parse(await readFile(file, "utf8"));
+}
+
+async function writeJson(file, value) {
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function packageVersions() {
+  const versions = new Map();
+  for (const dir of packageDirs) {
+    const pkg = await readJson(new URL(`${dir}/package.json`, root));
+    versions.set(pkg.name, pkg.version);
+  }
+  return versions;
+}
+
+function rewriteWorkspaceDependencies(pkg, versions) {
+  let changed = false;
+  for (const field of dependencyFields) {
+    const deps = pkg[field];
+    if (!deps) continue;
+    for (const [name, range] of Object.entries(deps)) {
+      if (range === "workspace:*" && versions.has(name)) {
+        deps[name] = `^${versions.get(name)}`;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+async function preparePackage(sourceDir, destination, versions) {
+  const targetDir = join(destination, basename(sourceDir));
+  await cp(new URL(`${sourceDir}/package.json`, root), join(targetDir, "package.json"), { recursive: true });
+  await cp(new URL(`${sourceDir}/README.md`, root), join(targetDir, "README.md"), { recursive: true });
+  await cp(new URL(`${sourceDir}/dist`, root), join(targetDir, "dist"), { recursive: true });
+
+  const pkgFile = join(targetDir, "package.json");
+  const pkg = await readJson(pkgFile);
+  if (rewriteWorkspaceDependencies(pkg, versions)) {
+    await writeJson(pkgFile, pkg);
+  }
+  return targetDir;
+}
+
 const temp = await mkdtemp(join(tmpdir(), "pgredis-pack-smoke-"));
 process.env.npm_config_cache = join(temp, ".npm-cache");
 
 try {
   await run("bun", ["run", "build"]);
 
-  const pgredisTarball = await packPackage("./packages/pgredis", temp);
-  const listenerTarball = await packPackage("./packages/bun-listen", temp);
-  const ioredisAliasTarball = await packPackage("./packages/noredis-ioredis", temp);
-  const redisAliasTarball = await packPackage("./packages/noredis-redis", temp);
+  const versions = await packageVersions();
+  const preparedDir = join(temp, "prepared");
+  const pgredisTarball = await packPackage(await preparePackage("packages/pgredis", preparedDir, versions), temp);
+  const listenerTarball = await packPackage(await preparePackage("packages/bun-listen", preparedDir, versions), temp);
+  const ioredisAliasTarball = await packPackage(await preparePackage("packages/noredis-ioredis", preparedDir, versions), temp);
+  const redisAliasTarball = await packPackage(await preparePackage("packages/noredis-redis", preparedDir, versions), temp);
 
   await writeFile(join(temp, "package.json"), "{\"type\":\"module\"}\n");
   await run("npm", ["init", "-y"], { cwd: temp });
