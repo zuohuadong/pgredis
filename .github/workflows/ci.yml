@@ -38,6 +38,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Validate workspace dependency specs
+        run: bun scripts/check-workspace-deps.mjs
+
       - name: Install dependencies
         run: bun install
 
@@ -90,6 +93,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Validate workspace dependency specs
+        run: bun scripts/check-workspace-deps.mjs
+
       - name: Install dependencies
         run: bun install
 
@@ -121,6 +127,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Validate workspace dependency specs
+        run: bun scripts/check-workspace-deps.mjs
 
       - name: Install dependencies
         run: bun install
